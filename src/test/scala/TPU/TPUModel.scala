@@ -1,16 +1,14 @@
 
-
-
-object MatMulModel {
+object TPUModel {
   type Matrix = Seq[Seq[Int]]
-  def findValAt(p: MatMulParams, a: Matrix, b: Matrix, ai: Int, bj: Int): Int = {
+  def findValAt(p: TPUParams, a: Matrix, b: Matrix, ai: Int, bj: Int): Int = {
     assert(p.aCols == p.bRows)
     val indices = (0 until p.aCols)
     val toSum =  indices map {k => a(ai)(k) * b(k)(bj)}
     return  toSum.sum
   }
 
-  def apply(p: MatMulParams, a: Matrix, b: Matrix): Matrix = {
+  def apply(p: TPUParams, a: Matrix, b: Matrix): Matrix = {
     assert(a.size == p.aRows)
     assert(a.head.size == p.aCols)
     assert(b.size == p.bRows)

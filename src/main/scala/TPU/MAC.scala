@@ -3,16 +3,15 @@ import chisel3._
 import chisel3.internal.firrtl.Width
 import chisel3.util._
 
-// adapted from https://github.com/AustinY2430/FPGA-Based-TPU/blob/main/Design/SYSMAC.v
 
-case class MACParams() {
-    val w: Int = 8 // datawidth
+case class MACParams(width: Int) {
+    val w: Int = width // datawidth
 }
 
-// TODO: do we need reset?
+
 class MAC(val p: MACParams) extends Module {
     val io = IO(new Bundle {
-        // TODO: could this be bundled?
+        // TODO: bundle inputs and outputs for ready valid
         val clear = Input(Bool())
         val inLeft = Flipped(Decoupled(SInt(p.w.W)))
         val inTop = Flipped(Decoupled(SInt(p.w.W)))
