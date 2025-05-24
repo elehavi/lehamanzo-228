@@ -29,7 +29,7 @@ object MatMulModel {
 */
 
 // TODO: create parametrized version
-class fixedTPUModel {
+class fixedTPUModel() {
   type Matrix = Seq[Seq[Int]]
   // represents the output/input of overall TPU
   // format: (systolic array, outRight, outBottom)
@@ -44,23 +44,27 @@ class fixedTPUModel {
     // for each row and column, if you are on the top/left edge, take input from module
     // else, take input from previous mac.
     // multiply and accumulate.
-    for (i <- 0 until 2) { 
-      for (j <- 0 until 2) {
+    printf("inTop: (%d,%d)\n", inTop(0), inTop(1))
+    printf("inLeft: (%d,%d)\n", inLeft(0), inLeft(1))
+   
+    for (i <- Seq(1,0)) { 
+      for (j <- Seq(1,0)) {
         var it = 0
         var il = 0
-        if(j==0) {
-          it = inTop(i)
-        } else {
-          it = sysArray(j-1)(i)(2)
-          }
-
         if(i==0) {
-          it = inLeft(j)
+          it = inTop(j)
+        } else {
+          it = sysArray(i-1)(j)(2)
+        }
+
+        if(j==0) {
+          il = inLeft(i)
           } else {
-            it = sysArray(j)(i-1)(2)
+            il = sysArray(i)(j-1)(1)
             }
-        val currResult = it * il + sysArray(j)(i)(0)
-        sysArray(j)(i) = Array(currResult, il, it)
+        printf("(%d,%d): inTop %d, inLeft %d, current result %d \n", i,j,it,il,sysArray(i)(j)(0))
+        val currResult = it * il + sysArray(i)(j)(0)
+        sysArray(i)(j) = Array(currResult, il, it)
       }
     }
   }

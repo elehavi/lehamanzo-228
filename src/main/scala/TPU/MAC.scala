@@ -1,3 +1,4 @@
+package tpu 
 
 import chisel3._
 import chisel3.internal.firrtl.Width
@@ -9,7 +10,7 @@ case class MACParams(width: Int) {
 }
 
 
-class MAC(val p: MACParams) extends Module {
+class MAC(p: MACParams) extends Module {
     val io = IO(new Bundle {
         // TODO: bundle inputs and outputs for ready valid
         val clear = Input(Bool())

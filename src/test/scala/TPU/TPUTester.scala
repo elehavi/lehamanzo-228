@@ -1,3 +1,5 @@
+package tpu
+
 import chisel3._
 import chiseltest._
 import chisel3.experimental.BundleLiterals._
@@ -152,6 +154,49 @@ it should "do one round of multiplication, clear, and do another round" in {
   }
 }
 
-// class TPUTester extends AnyFlatSpec with ChiselScalatestTester {
+class fixedTPUModelTester extends AnyFlatSpec with ChiselScalatestTester {
+  behavior of "fixedTPUModel"
+  it should "handle one round of inputs" in {
+    val ftpu = new fixedTPUModel()
+    ftpu.progressOneCycle(Seq(1,2), Seq(1,2))
+    val expected = Array(Array(Array(1,1,1), Array(0,0,2)), Array(Array(0,2,0), Array(0,0,0)))
+    for (row <- 0 until 2) {
+      for (col <- 0 until 2) {
+        for (elt <- 0 until 3) {
+          assert(ftpu.sysArray(row)(col)(elt) == expected(row)(col)(elt))
+        }
+      }
+    }
+  }
+  it should "complete simple matrix multiplication" in {
+    val ftpu = new fixedTPUModel()
+    ftpu.progressOneCycle(Seq(1,0), Seq(1,0))
+    ftpu.progressOneCycle(Seq(1,2), Seq(1,2))
+    ftpu.progressOneCycle(Seq(0,1), Seq(0,1))
+    val expected = Array(Array(Array(2,0,0), Array(3,1,1)), Array(Array(3,1,1), Array(4,2,2)))
+    for (r <- 0 until 2) {
+      for (c <- 0 until 2) {
+        for (e <- 0 until 3) {
+          assert(ftpu.sysArray(r)(c)(e) == expected(r)(c)(e))
+        }
+      }
+    }
+    
+  }
   
-// }
+}
+
+
+class fixedTPUTester extends AnyFlatSpec with ChiselScalatestTester {
+  ???
+}
+
+/*
+class TPUModelTester extends AnyFlatSpec with ChiselScalatestTester {
+  ???
+}
+
+class TPUTester extends AnyFlatSpec with ChiselScalatestTester {
+  ???
+}
+*/
