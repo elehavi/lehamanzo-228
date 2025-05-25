@@ -5,62 +5,63 @@ import chisel3.internal.firrtl.Width
 import chisel3.util._
 
 
-case class MACParams(width: Int) {
-    val w: Int = width // datawidth
+case class MACParams(inputWidth: Int, outputWidth: Int) {
+    val iw: Int = inputWidth // input width
+    val ow: Int = outputWidth // output width
 }
 
 
 class MAC(p: MACParams) extends Module {
     val io = IO(new Bundle {
-        // TODO: bundle inputs and outputs for ready valid
         val clear = Input(Bool())
-        val inLeft = Flipped(Decoupled(SInt(p.w.W)))
-        val inTop = Flipped(Decoupled(SInt(p.w.W)))
+        val inLeft = Flipped(Decoupled(SInt(p.iw.W)))
+        val inTop = Flipped(Decoupled(SInt(p.iw.W)))
 
-        val outRight = Decoupled(SInt(p.w.W))
-        val outBottom = Decoupled(SInt(p.w.W))
-        // 32 bits for now
-        val outResult = Decoupled(SInt((4*p.w).W))
+        val outRight = Decoupled(SInt(p.iw.W))
+        val outBottom = Decoupled(SInt(p.iw.W))
+        val outResult = Decoupled(SInt((p.ow).W))
     })
 
-    val currResult = RegInit(0.S(32.W))
+    val acc = RegInit(0.S(p.ow.W))
 
-    // Set Defaults
+    val rightData = Reg(SInt(p.iw.W))
+    val rightValid = RegInit(false.B)
+    val downData = Reg(SInt(p.iw.W))
+    val downValid = RegInit(false.B)
 
-    // Output at t0 invalid
-    io.outResult.valid := false.B
-    io.outRight.valid := false.B
-    io.outBottom.valid := false.B
+    // Latch propagating values until next cycle
+    io.outRight.bits := rightData
+    io.outRight.valid := rightValid
 
-    io.outResult.bits := 0.S
-    io.outRight.bits := 0.S
-    io.outBottom.bits := 0.S
+    io.outBottom.bits := downData
+    io.outBottom.valid := downValid
 
-    // Ready to receive data at t0
-    io.inLeft.ready := true.B
-    io.inTop.ready := true.B
-
-    // When inputs are valid, accumulate and propagate
-    when(io.inLeft.valid && io.inTop.valid) {
-        // Multiply and Accumulate
-        currResult := currResult + (io.inLeft.bits * io.inTop.bits)
-        // Update register
-        io.outResult.bits := currResult
-        io.outRight.bits := io.inLeft.bits
-        io.outBottom.bits := io.inTop.bits
-        
-        io.outResult.valid := true.B
-        io.outRight.valid := true.B
-        io.outBottom.valid := true.B
+    // latch outResult and only output when both inputs are valid data
+    io.outResult.bits := acc
+    io.outResult.valid := RegNext(io.inLeft.fire && io.inTop.fire, false.B)
     
-    // Otherwise if invalid, output zero and dont propagate
-    } .elsewhen(io.clear) {
-        // Dont read data this cycle
-        io.inLeft.ready := false.B
-        io.inTop.ready := false.B
+    // Ready for more data if successfully passed to neighbor
+    io.inLeft.ready := !rightValid || io.outRight.ready
+    io.inTop.ready := !downValid || io.outBottom.ready
 
-        currResult := 0.S
-        io.outResult.bits := 0.S
-        io.outResult.valid := true.B
-    }
+    // Once data is accumulated once, its no longer valid
+    when (io.outRight.ready)  { rightValid := false.B }
+    when (io.outBottom.ready) { downValid  := false.B }
+
+    // When clear, reset accumulated result
+    when(io.clear) {
+        acc := 0.S
+        rightValid := false.B
+        downValid := false.B
+    } .elsewhen (io.inLeft.fire && io.inTop.fire) {
+        // Multiply and Accumulate
+        acc := acc + (io.inLeft.bits * io.inTop.bits)
+
+        // Set Registers and propagate values
+        rightData := io.inLeft.bits
+        rightValid := true.B
+
+        downData := io.inTop.bits
+        downValid := true.B
+    } 
 }

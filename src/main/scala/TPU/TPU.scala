@@ -4,15 +4,17 @@ import chisel3._
 import chisel3.internal.firrtl.Width
 import chisel3.util._
 
-case class TPUParams (width: Int) {
+case class TPUParams (inputWidth: Int, outputWidth: Int) {
     // TODO: parametrize matrix size.
-    val w: Int = width // datawidth
+    val iw: Int = inputWidth // Input bitwidth
+    val ow: Int = outputWidth
+    val s: Int = 2 // Systolic Array Size
 
 }
 
 class TPU(val p:TPUParams) {
     val io = IO(new Bundle {
-        ???
+        
     })
 
     // TODO: generate array of MACs based on size of output matrix
@@ -21,69 +23,95 @@ class TPU(val p:TPUParams) {
 
 class TPU_fixed(p: TPUParams) extends Module {
     val io = IO(new Bundle {
-        val inTopNE = Flipped(Decoupled(SInt(p.w.W)))
-        val inTopNW = Flipped(Decoupled(SInt(p.w.W)))
-        val inLeftNW = Flipped(Decoupled(SInt(p.w.W)))
-        val inLeftSW = Flipped(Decoupled(SInt(p.w.W)))
+        val inTopNE = Flipped(Decoupled(SInt(p.iw.W)))
+        val inTopNW = Flipped(Decoupled(SInt(p.iw.W)))
+        val inLeftNW = Flipped(Decoupled(SInt(p.iw.W)))
+        val inLeftSW = Flipped(Decoupled(SInt(p.iw.W)))
 
-        val outRightNE = Decoupled(SInt(p.w.W))
-        val outRightSE = Decoupled(SInt(p.w.W))
-        val outBottomSW = Decoupled(SInt(p.w.W))
-        val outBottomSE = Decoupled(SInt(p.w.W))
+        val clear = Input(Bool())
 
-        val outResult = Decoupled(Vec(2, Vec(2,SInt(p.w.W)))) 
+        val outNE = Decoupled(SInt(p.ow.W))
+        val outNW = Decoupled(SInt(p.ow.W))
+        val outSE = Decoupled(SInt(p.ow.W))
+        val outSW = Decoupled(SInt(p.ow.W))
     })
     // TODO: Parameterize generation of MACS, hardcode for now
-    val macNE = Module(new MAC(MACParams(p.w))) // inLeft, inTop, outRight, outBottom, outResult
-    val macNW = Module(new MAC(MACParams(p.w)))
-    val macSE = Module(new MAC(MACParams(p.w)))
-    val macSW = Module(new MAC(MACParams(p.w)))
+    val macNE = Module(new MAC(MACParams(p.iw, p.ow))) // inLeft, inTop, outRight, outBottom, outResult
+    val macNW = Module(new MAC(MACParams(p.iw, p.ow)))
+    val macSE = Module(new MAC(MACParams(p.iw, p.ow)))
+    val macSW = Module(new MAC(MACParams(p.iw, p.ow)))
 
 
-
-    // Ready-Valid connections between MACs
-    macNE.io.inLeft.valid := macNW.io.outRight.valid
-    macSW.io.inTop.valid := macNW.io.outBottom.valid
-    macSE.io.inTop.valid := macNE.io.outBottom.valid
-    macSE.io.inLeft.valid := macSW.io.outRight.valid
-    
-    macNW.io.outRight.ready := macNE.io.inLeft.ready
-    macNW.io.outBottom.ready := macSW.io.inTop.ready
-    macSW.io.outRight.ready := macSE.io.inLeft.ready
-    macNE.io.outBottom.ready := macSE.io.inTop.ready
-    
-    // Ready-Valid connections for IO
-    io.outRightNE.valid := macNE.io.outRight.valid
-    io.outRightSE.valid := macSE.io.outRight.valid
-    io.outBottomSE.valid := macSE.io.outBottom.valid
-    io.outBottomSW.valid := macSW.io.outBottom.valid
-
-    io.inLeftNW.ready := macNW.io.inLeft.ready
-    io.inLeftSW.ready := macSW.io.inLeft.ready
-    io.inTopNE.ready := macNE.io.inTop.ready
-    io.inTopNW.ready := macNW.io.inTop.ready
-    
-    // Inputs to Systolic Array
+    // ----------------------------------------------- Systolic Array IO -----------------------------------------------
+    // IO Data and Valid to Systolic Array Input
     macNE.io.inTop.bits := io.inTopNE.bits
     macNW.io.inTop.bits := io.inTopNW.bits
     macNW.io.inLeft.bits := io.inLeftNW.bits
     macSW.io.inLeft.bits := io.inLeftSW.bits
 
-    // Connections between MACS
+    macNE.io.inTop.valid   := io.inTopNE.valid
+    macNW.io.inTop.valid   := io.inTopNW.valid
+    macNW.io.inLeft.valid  := io.inLeftNW.valid
+    macSW.io.inLeft.valid  := io.inLeftSW.valid
+
+    // IO Data and Valid from Systolic Array Output
+    io.outNE.valid := macNE.io.outResult.valid
+    io.outNW.valid := macNW.io.outResult.valid
+    io.outSE.valid := macSE.io.outResult.valid
+    io.outSW.valid := macSW.io.outResult.valid
+
+    io.outNE.bits := macNE.io.outResult.bits
+    io.outNW.bits := macNW.io.outResult.bits
+    io.outSE.bits := macSE.io.outResult.bits
+    io.outSW.bits := macSW.io.outResult.bits
+
+    // IO ready to Systolic Array Output
+    macNE.io.outResult.ready := io.outNE.ready
+    macNW.io.outResult.ready := io.outNW.ready
+    macSE.io.outResult.ready := io.outSE.ready
+    macSW.io.outResult.ready := io.outSW.ready
+
+    // Clear Inputs for Systolic Array
+    macNW.io.clear := io.clear
+    macNE.io.clear := io.clear
+    macSE.io.clear := io.clear
+    macSW.io.clear := io.clear
+
+    // ----------------------------------------------- Systolic Array Internal Wiring -----------------------------------------------
+    // Ready-Valid connections between MACs
+    macNW.io.outRight.ready  := macNE.io.inLeft.ready
+    macNW.io.outBottom.ready := macSW.io.inTop.ready
+    macSW.io.outRight.ready  := macSE.io.inLeft.ready
+    macNE.io.outBottom.ready := macSE.io.inTop.ready
+
+    macNE.io.inLeft.valid := macNW.io.outRight.valid
+    macSE.io.inLeft.valid := macSW.io.outRight.valid    
+    macSW.io.inTop.valid := macNW.io.outBottom.valid
+    macSE.io.inTop.valid := macNE.io.outBottom.valid
+    
+    // Data Connections between MACS
+    macNE.io.inLeft.bits := macNW.io.outRight.bits
+    macSE.io.inLeft.bits := macSW.io.outRight.bits
     macSW.io.inTop.bits := macNW.io.outBottom.bits
     macSE.io.inTop.bits := macNE.io.outBottom.bits
-    macNW.io.inLeft.bits := macNE.io.outRight.bits
-    macSW.io.inLeft.bits := macSE.io.outRight.bits
 
-    // Outputs from Systolic Array
-    io.outRightNE.bits := macNE.io.outRight.bits
-    io.outRightSE.bits := macSE.io.outRight.bits
-    io.outBottomSE.bits := macSE.io.outBottom.bits
-    io.outBottomSW.bits := macSW.io.outRight.bits
+    // Defaults
+    // east edge drains to nowhere
+    macNE.io.outRight.ready   := true.B   
+    macSE.io.outRight.ready   := true.B
+    // south edge drains to nowhere
+    macSW.io.outBottom.ready  := true.B
+    macSE.io.outBottom.ready  := true.B
+
+    //TODO Implement ready as control logic
+    io.inTopNE.ready  := true.B
+    io.inTopNW.ready  := true.B
+    io.inLeftNW.ready := true.B
+    io.inLeftSW.ready := true.B
 
     // State information
     // TODO: Parametrize number of cycles in counter.
-    val OpCycles = new Counter(3)
+    // val OpCycles = new Counter(s + 1)
 
     // TODO: add state for idle, load, calculating, and complete
     // TODO: calculate matrix results.
