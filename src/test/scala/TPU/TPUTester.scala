@@ -295,6 +295,67 @@ behavior of "TPU_fixed"
   } 
 }
 
+class fixedvecTPUTester extends AnyFlatSpec with ChiselScalatestTester {
+  behavior of "TPU_fixed_vec_io"
+
+  it should "multiply a 2×2 matrix pair" in {
+    val p = new TPUParams(8, 32)
+
+    test(new TPU_fixed_vec_io(p)).withAnnotations(Seq(WriteVcdAnnotation)) {
+      dut =>
+      /* ---------------- poke matrices ---------------- */
+      val aInit = Array(Array(1, 2), Array(3, 4))
+      val bInit = Array(Array(5, 7), Array(6, 8))
+
+      for (r <- 0 until p.aRows; c <- 0 until p.aCols)
+        dut.io.in.bits.a(r)(c).poke(aInit(r)(c).S(p.iw.W))
+      for (r <- 0 until p.bRows; c <- 0 until p.bCols)
+        dut.io.in.bits.b(r)(c).poke(bInit(r)(c).S(p.iw.W))
+
+      /* ------------- fire the bundle once ------------ */
+      dut.io.clear.poke(false.B)
+      dut.io.in.valid.poke(true.B)
+      dut.clock.step()            // cycle 0
+      dut.io.in.valid.poke(false.B)
+
+      /* ------------- pipeline latency ---------------- */
+      dut.clock.step(2)           // cycles 1–2
+
+      // NW = 1 × 5
+      dut.io.out.bits(0)(0).expect(5.S)
+
+      dut.clock.step()            // cycle 3
+
+      // NW = 1·5 + 2·6  = 17
+      dut.io.out.bits(0)(0).expect(17.S)
+      // NE = 1 × 7
+      dut.io.out.bits(0)(1).expect(7.S)
+      // SW = 3 × 5
+      dut.io.out.bits(1)(0).expect(15.S)
+
+      dut.clock.step()            // cycle 4
+
+      // NW unchanged
+      dut.io.out.bits(0)(0).expect(17.S)
+      // NE = 7 + 2·8 = 23
+      dut.io.out.bits(0)(1).expect(23.S)
+      // SW = 15 + 4·6 = 39
+      dut.io.out.bits(1)(0).expect(39.S)
+      // SE = 3 × 7 = 21
+      dut.io.out.bits(1)(1).expect(21.S)
+
+      dut.clock.step()            // cycle 5   ← SE first product just stored
+
+      /* extra cycle for SE’s second accumulation */
+      dut.clock.step()            // cycle 6
+
+      // SE = 21 + 4·8 = 53
+      dut.io.out.bits(1)(1).expect(53.S)
+    }
+  }
+}
+
+
 /*
 class TPUModelTester extends AnyFlatSpec with ChiselScalatestTester {
   ???
