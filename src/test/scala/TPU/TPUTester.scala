@@ -14,6 +14,7 @@ class MACTester extends AnyFlatSpec with ChiselScalatestTester {
 
       dut.io.clear.poke(false.B)
       dut.io.outResult.ready.poke(true.B)
+      dut.io.outResult.ready.poke(true.B)
       dut.io.inLeft.bits.poke(2.S)
       dut.io.inTop.bits.poke(2.S)
       dut.io.inLeft.valid.poke(true.B)
@@ -34,6 +35,7 @@ class MACTester extends AnyFlatSpec with ChiselScalatestTester {
     test(new MAC(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
       dut.io.clear.poke(false.B)
       dut.io.outResult.ready.poke(true.B)
+      dut.io.outResult.ready.poke(true.B)
       dut.io.inLeft.bits.poke(2.S)
       dut.io.inLeft.valid.poke(false.B)
       dut.io.inTop.bits.poke(2.S)
@@ -52,6 +54,7 @@ class MACTester extends AnyFlatSpec with ChiselScalatestTester {
     test(new MAC(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
       dut.io.clear.poke(false.B)
       dut.io.outResult.ready.poke(true.B)
+      dut.io.outResult.ready.poke(true.B)
       dut.io.inLeft.bits.poke(2.S)
       dut.io.inLeft.valid.poke(true.B)
       dut.io.inTop.bits.poke(2.S)
@@ -67,6 +70,7 @@ class MACTester extends AnyFlatSpec with ChiselScalatestTester {
       
       dut.io.clear.poke(false.B)
       dut.io.outResult.ready.poke(true.B)
+      dut.io.outResult.ready.poke(true.B)
       dut.io.inLeft.bits.poke(2.S)
       dut.io.inLeft.valid.poke(true.B)
       dut.io.inTop.bits.poke(2.S)
@@ -79,6 +83,10 @@ class MACTester extends AnyFlatSpec with ChiselScalatestTester {
       dut.io.inLeft.valid.poke(true.B)
       dut.io.inTop.bits.poke(1.S)
       dut.io.inTop.valid.poke(true.B)
+
+      dut.io.outRight.ready.poke(true.B)
+      dut.io.outBottom.ready.poke(true.B)
+
       dut.clock.step(1)
       dut.io.outResult.valid.expect(true.B)
       dut.io.outResult.bits.expect(5.S)
@@ -89,7 +97,7 @@ class MACTester extends AnyFlatSpec with ChiselScalatestTester {
       dut.io.inTop.valid.poke(false.B)
       dut.clock.step(1)
 
-      dut.io.outResult.valid.expect(true.B)
+      dut.io.outResult.valid.expect(false.B)
       dut.io.outResult.bits.expect(0.S)
     }
   }
@@ -98,6 +106,7 @@ it should "do one round of multiplication, clear, and do another round" in {
     test(new MAC(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
       
       dut.io.clear.poke(false.B)
+      dut.io.outResult.ready.poke(true.B)
       dut.io.outResult.ready.poke(true.B)
       dut.io.inLeft.bits.poke(2.S)
       dut.io.inLeft.valid.poke(true.B)
@@ -113,7 +122,7 @@ it should "do one round of multiplication, clear, and do another round" in {
       dut.io.inTop.valid.poke(false.B)
       dut.clock.step(1)
 
-      dut.io.outResult.valid.expect(true.B)
+      dut.io.outResult.valid.expect(false.B)
       dut.io.outResult.bits.expect(0.S)
 
       dut.io.clear.poke(false.B)
@@ -134,6 +143,7 @@ it should "do one round of multiplication, clear, and do another round" in {
 
       dut.io.clear.poke(false.B)
       dut.io.outResult.ready.poke(true.B)
+      dut.io.outResult.ready.poke(true.B)
       dut.io.inLeft.bits.poke(maxSInt)
       dut.io.inLeft.valid.poke(true.B)
       dut.io.inTop.bits.poke(maxSInt)
@@ -149,6 +159,7 @@ it should "do one round of multiplication, clear, and do another round" in {
       val minSInt = 0 - (1 << (p.iw - 1))
 
       dut.io.clear.poke(false.B)
+      dut.io.outResult.ready.poke(true.B)
       dut.io.outResult.ready.poke(true.B)
       dut.io.inLeft.bits.poke(minSInt)
       dut.io.inLeft.valid.poke(true.B)
@@ -263,12 +274,12 @@ behavior of "TPU_fixed"
       dut.io.outNW.valid.expect(false.B)
       dut.io.outNW.bits.expect(17.S)
 
-      // Check that NE = 3*5 + 4*6
+      // Check that NE = 7*1 + 2*8
       dut.io.outNE.valid.expect(true.B)
       dut.io.outNE.bits.expect(23.S)
-      // Check that SW = 7*1 + 2*8
+      // Check that SW = 3*5 + 4*6
       dut.io.outSW.valid.expect(true.B)
-      dut.io.outSW.bits.expect(23.S)
+      dut.io.outSW.bits.expect(39.S)
 
       // Check that SE = 3*7
       dut.io.outSE.valid.expect(true.B)
