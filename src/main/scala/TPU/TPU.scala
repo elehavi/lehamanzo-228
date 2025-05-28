@@ -4,14 +4,19 @@ import chisel3._
 import chisel3.internal.firrtl.Width
 import chisel3.util._
 
-case class TPUParams (inputWidth: Int, outputWidth: Int, m: Int, k: Int, n: Int) {
+case class TPUParams (inputWidth: Int, outputWidth: Int, systolicArrayWidth: Int, m: Int, k: Int, n: Int) {
     // TODO: parametrize matrix size.
     // A (m x k) X B (k x n) = C (m x n)
     val iw: Int = inputWidth // Input bitwidth
     val ow: Int = outputWidth
-    
 
-    val sysw: Int = systolicArrayWidth
+    val sysW: Int = systolicArrayWidth
+
+    val maxWrites = (systolicArrayWidth * 2)
+    val finalReads = (systolicArrayWidth - 1)
+
+    val aRows: Int = m
+    val aCols: Int = k
 
     val bRows: Int = k
     val bCols: Int = n
@@ -267,8 +272,8 @@ class TPU_parameterized(p: TPUParams) extends Module {
 
 
     // Connect outResult outputs from systolic array
-    for (row <- 0 until p.sysw) {
-        for(col <- 0 until p.sysw) {
+    for (row <- 0 until p.sysW) {
+        for(col <- 0 until p.sysW) {
             // IO Bits and Valid
             io.out(row)(col).bits  := systolicArray(row)(col).io.outResult.bits
             io.out(row)(col).valid := systolicArray(row)(col).io.outResult.valid
@@ -282,29 +287,29 @@ class TPU_parameterized(p: TPUParams) extends Module {
 
     // ----------------------------------------------- Systolic Array Internal Wiring -----------------------------------------------
     // Ready horizontal connections between MACs
-    for(row <- 0 until p.sysw) {
-        for(col <- 0 until p.sysw) {
+    for(row <- 0 until p.sysW) {
+        for(col <- 0 until p.sysW) {
             // first element ignore valid connection (goes to IO) 
             if (col > 0) {
                     systolicArray(row)(col - 1).io.outRight.ready := systolicArray(row)(col).io.inLeft.ready
                     systolicArray(row)(col).io.inLeft.valid       := systolicArray(row)(col - 1).io.outRight.valid
                     systolicArray(row)(col).io.inLeft.bits        := systolicArray(row)(col - 1).io.outRight.bits
             }
-            if (col == p.sysw - 1) {
+            if (col == p.sysW - 1) {
                 // Defaults since drains to edge
                 systolicArray(row)(col).io.outRight.ready := true.B
             }
         }
     }
     // Ready vertical connections between MACs
-    for(col <- 0 until p.sysw) {
-        for(row <- 0 until p.sysw) {
+    for(col <- 0 until p.sysW) {
+        for(row <- 0 until p.sysW) {
             if (row > 0) {
                 systolicArray(row - 1)(col).io.outBottom.ready := systolicArray(row)(col).io.inTop.ready
                 systolicArray(row)(col).io.inTop.valid         := systolicArray(row - 1)(col).io.outBottom.valid
                 systolicArray(row)(col).io.inTop.bits          := systolicArray(row - 1)(col).io.outBottom.bits
             }
-            if (row == p.sysw - 1) {
+            if (row == p.sysW - 1) {
                 // Defaults since drains to edge
                 systolicArray(row)(col).io.outBottom.ready := true.B
             }
@@ -468,8 +473,8 @@ class Top_parameterized(p: TPUParams) extends Module {
     // -----------------------------------------------Output Read Logic-----------------------------------------------
 
     // Stores previous values of each MAC output
-    val prevVal = VecInit.tabulate(p.sysw) { r =>
-        VecInit.tabulate(p.sysw) { c =>
+    val prevVal = VecInit.tabulate(p.sysW) { r =>
+        VecInit.tabulate(p.sysW) { c =>
             // each element is a RegNext of the matching out(r)(c).bits
             RegNext(TPU.io.out(r)(c).bits, 0.S(p.ow.W))
         }
@@ -479,18 +484,18 @@ class Top_parameterized(p: TPUParams) extends Module {
                                  VecInit.fill(p.sysW)(0.U(log2Ceil(p.sysW).W))))
 
     // MAC output is ready as long as thee are still outputs to be read
-    for (row <- 0 until p.sysw) {
-        for(col <- 0 until p.sysw) {
-            TPU.io.out(row)(col).ready := readsRemaining(row)(col) =/= 0.U
+    for (row <- 0 until p.sysW) {
+        for(col <- 0 until p.sysW) {
+            TPU.io.out(row)(col).ready := macReadsRemaining(row)(col) =/= 0.U
         }
     }
 
     // When outresult is valid and nonzero and it can still be read, read it out
-    for (row <- 0 until p.sysw) {
-        for(col <- 0 until p.sysw) {
+    for (row <- 0 until p.sysW) {
+        for(col <- 0 until p.sysW) {
             when (TPU.io.out(row)(col).valid && TPU.io.out(row)(col).bits =/= prevVal(row)(col)) {
                 cReg(row)(col) := TPU.io.out(row)(col).bits
-                readsRemaining(row)(col) := readsRemaining(row)(col) - 1.U
+                macReadsRemaining(row)(col) := macReadsRemaining(row)(col) - 1.U
             }
         }
     }    
