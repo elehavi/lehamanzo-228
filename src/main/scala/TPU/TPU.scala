@@ -452,7 +452,7 @@ class Top_parameterized(p: TPUParams) extends Module {
         val out = Valid(Vec(p.aRows, Vec(p.bCols, SInt(p.ow.W))))
 
     })
-    // 2x2 parametrized systolic array
+    // ----------------------------------------------Systolic Array and Mem----------------------------------------------
     val TPU = Module(new TPU_parameterized(p))
 
     // Matrix Storage
@@ -462,12 +462,7 @@ class Top_parameterized(p: TPUParams) extends Module {
     val cReg = RegInit(VecInit.tabulate(p.aRows)(_ =>
                 VecInit.fill(p.bCols)(0.S(p.ow.W))))
 
-    // -1 is the idle state
-    // TODO Elaborate counter length as a function of the systolic array size
-    val writeCycle = new Counter(6)    // holds -1,0,1,2,3,4
-
-    // Registers representing times to read from MACs
-
+    // ----------------------------------------------Output Read Logic----------------------------------------------
     // Stores previous values of each MAC output
     val prevVal = VecInit.tabulate(p.sysw) { r =>
         VecInit.tabulate(p.sysw) { c =>
@@ -518,60 +513,50 @@ class Top_parameterized(p: TPUParams) extends Module {
 
     io.in.ready := topReadySignals.reduce(_ && _) && leftReadySignals.reduce(_ && _)
 
+    object TPUState extends ChiselEnum {
+        val idle, writing, reading, complete = Value
+    }
+    val state = RegInit(TPUState.idle)
 
-    switch(writeCycle.value) {
-    // Flashes input matrices to local registers in state -1
-        is(0.U){
+    val maxWrites = (p.sysw * 2)
+    val finalReads = (p.sysw - 1)
+    val writeCycle = new Counter(maxWrites)
+    val readCycle = new Counter(finalReads)
+
+    // Counters for each Top/Left Index to write to per w
+    for (i <- 0 until p.sysw) {
+
+        val sendRange = (writeCycle.value >= i.U) && (writeCycle.value <  (i + p.sysw).U)
+        TPU.io.inLeft(i).valid := (state === TPUState.writing) && sendRange
+        TPU.io.inLeft(i).bits := aReg(i)(writeCycle.value - i.U)
+
+        TPU.io.inTop(i).valid := (state === TPUState.writing) && sendRange
+        TPU.io.inTop(i).bits := bReg(writeCycle.value - i.U)(i)
+    }
+
+    switch(state) {
+        // When idle, flash local Matrix A and B storage
+        is(TPUState.idle) {
             aReg := io.in.bits.a
             bReg := io.in.bits.b
-            writeCycle.inc()  
+            state := TPUState.writing  
         }
-        is(1.U) {
-            // First Write
-            TPU.io.inLeft(0).valid := true.B
-            TPU.io.inTop(0).valid := true.B
-
-            TPU.io.inLeft(0).bits := aReg(0)(0)
-            TPU.io.inTop(0).bits := bReg(0)(0)
-
-            writeCycle.inc()  
+        // When writing, data is written to each inTop and inLeft referring to writeCycle counter value
+        is(TPUState.writing) {
+            when (writeCycle.value === maxWrites.U - 1.U) { state := TPUState.reading }
+            .otherwise                                     { writeCycle.inc()}
         }
-        is(2.U) {
-            // Last write
-            TPU.io.inLeft(0).valid := true.B
-            TPU.io.inTop(0).valid := true.B
-            TPU.io.inLeft(0).bits := aReg(0)(1)
-            TPU.io.inTop(0).bits := bReg(1)(0)
-
-            // First Write
-            TPU.io.inLeft(1).valid := true.B
-            TPU.io.inTop(1).valid := true.B
-            TPU.io.inLeft(1).bits := aReg(1)(0)
-            TPU.io.inTop(1).bits := bReg(0)(1)
-
-
-            writeCycle.inc()  
+        // After final write, remaining reads take place
+        is(TPUState.reading) {
+            when (readCycle.value === finalReads.U - 1.U) { state := TPUState.complete}
+            .otherwise                                     { readCycle.inc()}
         }
-        is(3.U) {
-            // Last write
-            TPU.io.inLeft(1).valid := true.B
-            TPU.io.inTop(1).valid := true.B
-            TPU.io.inLeft(1).bits := aReg(1)(1)
-            TPU.io.inTop(1).bits := bReg(1)(1)
-
-            writeCycle.inc()  
-        }
-        is(4.U) {
-            writeCycle.inc()  
-
-        }
-        is(5.U) {
-            // Last read
-            writeCycle.inc()  
+        // TPU holds computed Matrix C on output until cleared
+        is(TPUState.complete) {
+            io.out.bits := cReg
+            io.out.valid := TPU.io.out(p.sysw.U - 1.U)(p.sysw.U - 1.U).valid
+            when (io.clear) {state := TPUState.idle}
         }
     }
-    io.out.bits := cReg
-    io.out.valid := writeCycle.value === 5.U 
-
     TPU.io.clear := io.clear
 }

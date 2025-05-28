@@ -412,6 +412,36 @@ class parameterizedTPUTester extends AnyFlatSpec with ChiselScalatestTester {
       dut.io.out.bits(1)(1).expect(53.S)
     }
   }
+  it should "multiply a 3x3 matrix" in {
+    val p = new TPUParams(8, 32, 3)
+
+    test(new Top_parameterized(p)).withAnnotations(Seq(WriteVcdAnnotation)) {
+      dut =>
+      /* ---------------- poke matrices ---------------- */
+      val aInit = Array(Array(1, 2, 3), Array(4, 5, 6), Array(7, 8, 9))
+      val bInit = Array(Array(10, 11, 12), Array(13, 14, 15), Array(16, 17, 18))
+
+      val exp = Array( Array( 84, 90, 96), Array(201, 216, 231), Array(318, 342, 366))
+
+      for (r <- 0 until p.aRows; c <- 0 until p.aCols)
+        dut.io.in.bits.a(r)(c).poke(aInit(r)(c).S(p.iw.W))
+      for (r <- 0 until p.bRows; c <- 0 until p.bCols)
+        dut.io.in.bits.b(r)(c).poke(bInit(r)(c).S(p.iw.W))
+
+      /* ------------- fire the bundle once ------------ */
+      dut.io.clear.poke(false.B)
+      dut.io.in.valid.poke(true.B)
+      dut.clock.step()            // cycle 0
+      dut.io.in.valid.poke(false.B)
+
+      /* ------------- pipeline latency ---------------- */
+      dut.clock.step((p.sysw * 2 - 1) +  (p.sysw * 2 - 1))           // cycles 1–2
+
+      for (r <- 0 until p.sysw; c <- 0 until p.sysw) {
+        dut.io.out.bits(r)(c).expect(exp(r)(c).S(p.ow.W))
+      }
+    }
+  }
 }
 
 
