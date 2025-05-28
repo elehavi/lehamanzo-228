@@ -239,12 +239,14 @@ class TPU_parameterized(p: TPUParams) extends Module {
         val clear  = Input(Bool())
 
         // Vector inputs corresponding to top and left systolic array inputs
+        // Vector inputs corresponding to top and left systolic array inputs
         val inTop  = Flipped(Vec(p.aCols,  Decoupled(SInt(p.iw.W))))
         val inLeft = Flipped(Vec(p.aRows,  Decoupled(SInt(p.iw.W))))
 
         val out    = Vec(p.aRows, Vec(p.bCols, Decoupled(SInt(p.ow.W))))
     })
 
+    // Systolic Array parameterized by TPU params
     // Systolic Array parameterized by TPU params
     val systolicArray: Seq[Seq[MAC]] =
         Seq.fill(p.sysW, p.sysW)(Module(new MAC(macParams(p.iw, p.ow))))
@@ -456,6 +458,7 @@ class Top_parameterized(p: TPUParams) extends Module {
     // --------------------------------------------Systolic Array and Mem--------------------------------------------
     val TPU  = Module(new TPU_parameterized(p))
 
+    // Local memory to flash input matrices to in idle state
     // Local memory to flash input matrices to in idle state
     val aReg = Reg(Vec(p.aRows, Vec(p.aCols, SInt(p.iw.W))))
     val bReg = Reg(Vec(p.bRows, Vec(p.bCols, SInt(p.iw.W))))
