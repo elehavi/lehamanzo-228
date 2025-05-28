@@ -207,7 +207,7 @@ class fixedTPUModelTester extends AnyFlatSpec with ChiselScalatestTester {
 class fixedTPUTester extends AnyFlatSpec with ChiselScalatestTester {
 behavior of "TPU_fixed"
   it should "Multiply the first inputs" in {
-    val p = new TPUParams(8, 32, 2, 2, 2)
+    val p = new TPUParams(8, 32, 2, 2, 2, 2)
     test(new TPU_fixed(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
       dut.io.clear.poke(false.B)
       // Ready to Consume from NW MAC
@@ -298,7 +298,7 @@ class fixedvecTPUTester extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "Top_vec_io"
 
   it should "output intermediate accumulations in correct cycles" in {
-    val p = new TPUParams(8, 32, 2, 2, 2)
+    val p = new TPUParams(8, 32, 2, 2, 2, 2)
 
     test(new Top_vec_io(p)).withAnnotations(Seq(WriteVcdAnnotation)) {
       dut =>
@@ -358,7 +358,7 @@ class fixedvecTPUTester extends AnyFlatSpec with ChiselScalatestTester {
 class TPUModelTester extends AnyFlatSpec with ChiselScalatestTester {
    behavior of "TPUModel"
   it should "handle one round of inputs" in {
-    val p = TPUParams(8, 16, 2, 2, 2)
+    val p = TPUParams(8, 16, 2, 2, 2, 2)
     val tpu = new TPUModel(p)
     tpu.progressOneCycle(Seq(1,2), Seq(1,2))
     val expected = Array(Array(Array(1,1,1), Array(0,0,2)), Array(Array(0,2,0), Array(0,0,0)))
@@ -371,7 +371,7 @@ class TPUModelTester extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
   it should "complete simple matrix multiplication" in {
-    val p = TPUParams(8, 16, 2, 2, 2)
+    val p = TPUParams(8, 16, 2, 2, 2, 2)
     val tpu = new TPUModel(p)
     tpu.progressOneCycle(Seq(1,0), Seq(1,0))
     tpu.progressOneCycle(Seq(1,2), Seq(1,2))
@@ -393,7 +393,7 @@ class parameterizedTPUTester extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "Top_parameterized"
 
   it should "output intermediate accumulations in correct cycles" in {
-    val p = new TPUParams(8, 32, 2, 2, 2)
+    val p = new TPUParams(8, 32, 2, 2, 2, 2)
 
     test(new Top_parameterized(p)).withAnnotations(Seq(WriteVcdAnnotation)) {
       dut =>
@@ -448,7 +448,7 @@ class parameterizedTPUTester extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
   it should "multiply a 3x3 matrix" in {
-    val p = new TPUParams(8, 32, 3)
+    val p = new TPUParams(8, 32, 3, 3, 3 ,3)
 
     test(new Top_parameterized(p)).withAnnotations(Seq(WriteVcdAnnotation)) {
       dut =>
