@@ -9,7 +9,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 class MACTester extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "MAC"
   it should "pass inLeft to outRight" in {
-    val p = new MACParams(8, 32)
+    val p = new macParams(8, 32)
     test(new MAC(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
 
       dut.io.clear.poke(false.B)
@@ -31,7 +31,7 @@ class MACTester extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
   it should "not move data without valid input" in {
-    val p = new MACParams(8, 32)
+    val p = new macParams(8, 32)
     test(new MAC(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
       dut.io.clear.poke(false.B)
       dut.io.outResult.ready.poke(true.B)
@@ -50,7 +50,7 @@ class MACTester extends AnyFlatSpec with ChiselScalatestTester {
     // TODO: implement later. figure out ready signals as we connect MAC's
   }
   it should "do one round of multiplication" in {
-    val p = new MACParams(8, 32)
+    val p = new macParams(8, 32)
     test(new MAC(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
       dut.io.clear.poke(false.B)
       dut.io.outResult.ready.poke(true.B)
@@ -65,7 +65,7 @@ class MACTester extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
   it should "do two rounds of multiplication and clear" in {
-    val p = new MACParams(8, 32)
+    val p = new macParams(8, 32)
     test(new MAC(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
       
       dut.io.clear.poke(false.B)
@@ -102,7 +102,7 @@ class MACTester extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 it should "do one round of multiplication, clear, and do another round" in {
-    val p = new MACParams(8, 32)
+    val p = new macParams(8, 32)
     test(new MAC(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
       
       dut.io.clear.poke(false.B)
@@ -137,7 +137,7 @@ it should "do one round of multiplication, clear, and do another round" in {
   }
   
     it should "handle the result of maximum size inputs" in {
-    val p = new MACParams(8, 32)
+    val p = new macParams(8, 32)
     test(new MAC(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
       val maxSInt = (1 << (p.iw - 1)) - 1
 
@@ -154,7 +154,7 @@ it should "do one round of multiplication, clear, and do another round" in {
     }
   }
     it should "handle the result of minimum size inputs" in {
-    val p = new MACParams(8, 32)
+    val p = new macParams(8, 32)
     test(new MAC(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
       val minSInt = 0 - (1 << (p.iw - 1))
 
@@ -435,9 +435,10 @@ class parameterizedTPUTester extends AnyFlatSpec with ChiselScalatestTester {
       dut.io.in.valid.poke(false.B)
 
       /* ------------- pipeline latency ---------------- */
-      dut.clock.step((p.sysw * 2 - 1) +  (p.sysw * 2 - 1))           // cycles 1–2
+      // Max writes + final reads
+      dut.clock.step((p.sysW * 2 - 1) +  (p.sysW * 2 - 1))           // cycles 1–2
 
-      for (r <- 0 until p.sysw; c <- 0 until p.sysw) {
+      for (r <- 0 until p.sysW; c <- 0 until p.sysW) {
         dut.io.out.bits(r)(c).expect(exp(r)(c).S(p.ow.W))
       }
     }
