@@ -11,10 +11,7 @@ case class TPUParams (inputWidth: Int, outputWidth: Int, m: Int, k: Int, n: Int)
     val ow: Int = outputWidth
     
 
-    val sysw: Int = m // TODO: fix when we remove last sysw
-
-    val aRows: Int = m
-    val aCols: Int = k
+    val sysw: Int = systolicArrayWidth
 
     val bRows: Int = k
     val bCols: Int = n
@@ -38,10 +35,10 @@ class TPU_fixed(p: TPUParams) extends Module {
         val outSW = Decoupled(SInt(p.ow.W))
     })
     // TODO: Parameterize generation of MACS, hardcode for now
-    val macNE = Module(new MAC(MACParams(p.iw, p.ow))) // inLeft, inTop, outRight, outBottom, outResult
-    val macNW = Module(new MAC(MACParams(p.iw, p.ow)))
-    val macSE = Module(new MAC(MACParams(p.iw, p.ow)))
-    val macSW = Module(new MAC(MACParams(p.iw, p.ow)))
+    val macNE = Module(new MAC(macParams(p.iw, p.ow))) // inLeft, inTop, outRight, outBottom, outResult
+    val macNW = Module(new MAC(macParams(p.iw, p.ow)))
+    val macSE = Module(new MAC(macParams(p.iw, p.ow)))
+    val macSW = Module(new MAC(macParams(p.iw, p.ow)))
 
 
     // ----------------------------------------------- Systolic Array IO -----------------------------------------------
@@ -111,7 +108,6 @@ class TPU_fixed(p: TPUParams) extends Module {
     io.inLeftSW.ready := true.B        
 }
 
-
 class Top_vec_io(p: TPUParams) extends Module {
     val io = IO(new Bundle {
         
@@ -138,22 +134,22 @@ class Top_vec_io(p: TPUParams) extends Module {
     val writeCycle = new Counter(6)    // holds -1,0,1,2,3,4
 
     // Registers representing times to read from MACs
-    val nwReadsRemaining = RegInit(0.U(2.W))
-    val neReadsRemaining = RegInit(0.U(2.W))
-    val swReadsRemaining = RegInit(0.U(2.W))
-    val seReadsRemaining = RegInit(0.U(2.W))
+    val nwmacReadsRemaining = RegInit(0.U(2.W))
+    val nemacReadsRemaining = RegInit(0.U(2.W))
+    val swmacReadsRemaining = RegInit(0.U(2.W))
+    val semacReadsRemaining = RegInit(0.U(2.W))
 
     // When register is zero, MAC value is finalized
-    TPU.io.outNW.ready := nwReadsRemaining =/= 0.U
-    TPU.io.outNE.ready := neReadsRemaining =/= 0.U
-    TPU.io.outSW.ready := swReadsRemaining =/= 0.U
-    TPU.io.outSE.ready := seReadsRemaining =/= 0.U
+    TPU.io.outNW.ready := nwmacReadsRemaining =/= 0.U
+    TPU.io.outNE.ready := nemacReadsRemaining =/= 0.U
+    TPU.io.outSW.ready := swmacReadsRemaining =/= 0.U
+    TPU.io.outSE.ready := semacReadsRemaining =/= 0.U
 
     // When outresult is valid and nonzero and it can still be read, read it out
-    when (TPU.io.outNW.fire) { cReg(0)(0) := TPU.io.outNW.bits ; nwReadsRemaining := nwReadsRemaining - 1.U }
-    when (TPU.io.outNE.fire) { cReg(0)(1) := TPU.io.outNE.bits ; neReadsRemaining := neReadsRemaining - 1.U }
-    when (TPU.io.outSW.fire) { cReg(1)(0) := TPU.io.outSW.bits ; swReadsRemaining := swReadsRemaining - 1.U }
-    when (TPU.io.outSE.fire) { cReg(1)(1) := TPU.io.outSE.bits ; seReadsRemaining := seReadsRemaining - 1.U }
+    when (TPU.io.outNW.fire) { cReg(0)(0) := TPU.io.outNW.bits ; nwmacReadsRemaining := nwmacReadsRemaining - 1.U }
+    when (TPU.io.outNE.fire) { cReg(0)(1) := TPU.io.outNE.bits ; nemacReadsRemaining := nemacReadsRemaining - 1.U }
+    when (TPU.io.outSW.fire) { cReg(1)(0) := TPU.io.outSW.bits ; swmacReadsRemaining := swmacReadsRemaining - 1.U }
+    when (TPU.io.outSE.fire) { cReg(1)(1) := TPU.io.outSE.bits ; semacReadsRemaining := semacReadsRemaining - 1.U }
     
     // Defaults
 
@@ -183,7 +179,7 @@ class Top_vec_io(p: TPUParams) extends Module {
         }
         is(1.U) {
             // First Write
-            nwReadsRemaining := 2.U
+            nwmacReadsRemaining := 2.U
             TPU.io.inTopNW.valid := true.B
             TPU.io.inLeftNW.valid := true.B
 
@@ -200,8 +196,8 @@ class Top_vec_io(p: TPUParams) extends Module {
             TPU.io.inLeftNW.bits := aReg(0)(1)
 
             // First Write
-            neReadsRemaining := 2.U
-            swReadsRemaining := 2.U
+            nemacReadsRemaining := 2.U
+            swmacReadsRemaining := 2.U
             TPU.io.inTopNE.valid := true.B
             TPU.io.inLeftSW.valid := true.B
             TPU.io.inTopNE.bits := bReg(0)(1)
@@ -212,7 +208,7 @@ class Top_vec_io(p: TPUParams) extends Module {
         }
         is(3.U) {
             // Last write
-            seReadsRemaining := 2.U
+            semacReadsRemaining := 2.U
             TPU.io.inTopNE.valid := true.B
             TPU.io.inLeftSW.valid := true.B
             TPU.io.inTopNE.bits := bReg(1)(1)
@@ -221,92 +217,94 @@ class Top_vec_io(p: TPUParams) extends Module {
             writeCycle.inc()  
         }
         is(4.U) {
-            when (neReadsRemaining === 0.U && swReadsRemaining === 0.U) {
+            when (nemacReadsRemaining === 0.U && swmacReadsRemaining === 0.U) {
                 writeCycle.inc()  
             }
         }
         is(5.U) {
             // Last read
-            when (nwReadsRemaining === 0.U && seReadsRemaining === 0.U) {
+            when (nwmacReadsRemaining === 0.U && semacReadsRemaining === 0.U) {
                 writeCycle.inc()  
             }
         }
     }
     io.out.bits := cReg
-    io.out.valid := writeCycle.value === 4.U && nwReadsRemaining === 0.U && neReadsRemaining  === 0.U && swReadsRemaining  === 0.U && seReadsRemaining  === 0.U
+    io.out.valid := writeCycle.value === 4.U && nwmacReadsRemaining === 0.U && nemacReadsRemaining  === 0.U && swmacReadsRemaining  === 0.U && semacReadsRemaining  === 0.U
 
     TPU.io.clear := io.clear
 }
 
 class TPU_parameterized(p: TPUParams) extends Module {
     val io = IO(new Bundle {
-        val clear = Input(Bool())
+        val clear  = Input(Bool())
 
-        // Row Major Order ([NW, NE], [SW, SE])
+        // Vector inputs corresponding to top and left systolic array inputs
+        // Vector inputs corresponding to top and left systolic array inputs
         val inTop  = Flipped(Vec(p.aCols,  Decoupled(SInt(p.iw.W))))
         val inLeft = Flipped(Vec(p.aRows,  Decoupled(SInt(p.iw.W))))
 
-        val out = Vec(p.aRows, Vec(p.bCols, Decoupled(SInt(p.ow.W))))
+        val out    = Vec(p.aRows, Vec(p.bCols, Decoupled(SInt(p.ow.W))))
     })
 
-    // TODO: Parameterize generation of MACS, hardcode for now
+    // Systolic Array parameterized by TPU params
+    // Systolic Array parameterized by TPU params
     val systolicArray: Seq[Seq[MAC]] =
-        Seq.fill(p.sysw, p.sysw)(Module(new MAC(MACParams(p.iw, p.ow))))
+        Seq.fill(p.sysW, p.sysW)(Module(new MAC(macParams(p.iw, p.ow))))
 
     // ----------------------------------------------- Systolic Array IO -----------------------------------------------
     // IO Data and Valid to Systolic Array Input
 
-    // Connect data and valid inputs to Systolic Array
-    for (i <- 0 until p.sysw) {
+    // Link data and valid inputs from TPU io to Systolic Array
+    for (i <- 0 until p.sysW) {
         systolicArray(0)(i).io.inTop.valid := io.inTop(i).valid
-        systolicArray(0)(i).io.inTop.bits := io.inTop(i).bits
-        io.inTop(i).ready := true.B
+        systolicArray(0)(i).io.inTop.bits  := io.inTop(i).bits
+        io.inTop(i).ready                  := true.B
 
         systolicArray(i)(0).io.inLeft.valid := io.inLeft(i).valid
-        systolicArray(i)(0).io.inLeft.bits := io.inLeft(i).bits
-        io.inLeft(i).ready := true.B
+        systolicArray(i)(0).io.inLeft.bits  := io.inLeft(i).bits
+        io.inLeft(i).ready                  := true.B
     }
 
 
     // Connect outResult outputs from systolic array
-    for (row <- 0 until p.cRows) {
-        for(col <- 0 until p.cCols) {
+    for (row <- 0 until p.sysw) {
+        for(col <- 0 until p.sysw) {
             // IO Bits and Valid
-            io.out(row)(col).bits := systolicArray(row)(col).io.outResult.bits
+            io.out(row)(col).bits  := systolicArray(row)(col).io.outResult.bits
             io.out(row)(col).valid := systolicArray(row)(col).io.outResult.valid
             // IO Ready 
             
             systolicArray(row)(col).io.outResult.ready := io.out(row)(col).ready
             // Clear
-            systolicArray(row)(col).io.clear := io.clear
+            systolicArray(row)(col).io.clear           := io.clear
         }
     }
 
     // ----------------------------------------------- Systolic Array Internal Wiring -----------------------------------------------
     // Ready horizontal connections between MACs
-    for(row <- 0 until p.cRows) {
-        for(col <- 0 until p.cCols) {
+    for(row <- 0 until p.sysw) {
+        for(col <- 0 until p.sysw) {
             // first element ignore valid connection (goes to IO) 
             if (col > 0) {
                     systolicArray(row)(col - 1).io.outRight.ready := systolicArray(row)(col).io.inLeft.ready
-                    systolicArray(row)(col).io.inLeft.valid := systolicArray(row)(col - 1).io.outRight.valid
-                    systolicArray(row)(col).io.inLeft.bits := systolicArray(row)(col - 1).io.outRight.bits
+                    systolicArray(row)(col).io.inLeft.valid       := systolicArray(row)(col - 1).io.outRight.valid
+                    systolicArray(row)(col).io.inLeft.bits        := systolicArray(row)(col - 1).io.outRight.bits
             }
-            if (col == p.cCols - 1) {
+            if (col == p.sysw - 1) {
                 // Defaults since drains to edge
                 systolicArray(row)(col).io.outRight.ready := true.B
             }
         }
     }
     // Ready vertical connections between MACs
-    for(col <- 0 until p.cRows) {
-        for(row <- 0 until p.cCols) {
+    for(col <- 0 until p.sysw) {
+        for(row <- 0 until p.sysw) {
             if (row > 0) {
                 systolicArray(row - 1)(col).io.outBottom.ready := systolicArray(row)(col).io.inTop.ready
-                systolicArray(row)(col).io.inTop.valid := systolicArray(row - 1)(col).io.outBottom.valid
-                systolicArray(row)(col).io.inTop.bits := systolicArray(row - 1)(col).io.outBottom.bits
+                systolicArray(row)(col).io.inTop.valid         := systolicArray(row - 1)(col).io.outBottom.valid
+                systolicArray(row)(col).io.inTop.bits          := systolicArray(row - 1)(col).io.outBottom.bits
             }
-            if (row == p.cRows - 1) {
+            if (row == p.sysw - 1) {
                 // Defaults since drains to edge
                 systolicArray(row)(col).io.outBottom.ready := true.B
             }
@@ -350,23 +348,23 @@ class Top_fixed_TPU_parameterized(p: TPUParams) extends Module {
     val SWChanged = TPU.io.out(1)(0).bits =/= prevSW
     val SEChanged = TPU.io.out(1)(1).bits =/= prevSE
 
-    val nwReadsRemaining = RegInit(0.U(2.W))
-    val neReadsRemaining = RegInit(0.U(2.W))
-    val swReadsRemaining = RegInit(0.U(2.W))
-    val seReadsRemaining = RegInit(0.U(2.W))
+    val nwmacReadsRemaining = RegInit(0.U(2.W))
+    val nemacReadsRemaining = RegInit(0.U(2.W))
+    val swmacReadsRemaining = RegInit(0.U(2.W))
+    val semacReadsRemaining = RegInit(0.U(2.W))
 
     // When outresult is valid and nonzero and it can still be read, read it out
-    when (NWChanged && TPU.io.out(0)(0).valid) { cReg(0)(0) := TPU.io.out(0)(0).bits ; nwReadsRemaining := nwReadsRemaining - 1.U }
-    when (NEChanged && TPU.io.out(0)(1).valid) { cReg(0)(1) := TPU.io.out(0)(1).bits ; neReadsRemaining := neReadsRemaining - 1.U }
-    when (SWChanged && TPU.io.out(1)(0).valid) { cReg(1)(0) := TPU.io.out(1)(0).bits ; swReadsRemaining := swReadsRemaining - 1.U }
-    when (SEChanged && TPU.io.out(1)(1).valid) { cReg(1)(1) := TPU.io.out(1)(1).bits ; seReadsRemaining := seReadsRemaining - 1.U }
+    when (NWChanged && TPU.io.out(0)(0).valid) { cReg(0)(0) := TPU.io.out(0)(0).bits ; nwmacReadsRemaining := nwmacReadsRemaining - 1.U }
+    when (NEChanged && TPU.io.out(0)(1).valid) { cReg(0)(1) := TPU.io.out(0)(1).bits ; nemacReadsRemaining := nemacReadsRemaining - 1.U }
+    when (SWChanged && TPU.io.out(1)(0).valid) { cReg(1)(0) := TPU.io.out(1)(0).bits ; swmacReadsRemaining := swmacReadsRemaining - 1.U }
+    when (SEChanged && TPU.io.out(1)(1).valid) { cReg(1)(1) := TPU.io.out(1)(1).bits ; semacReadsRemaining := semacReadsRemaining - 1.U }
 
 
     // When register is zero, MAC value is finalized
-    TPU.io.out(0)(0).ready := nwReadsRemaining =/= 0.U
-    TPU.io.out(0)(1).ready := neReadsRemaining =/= 0.U
-    TPU.io.out(1)(0).ready := swReadsRemaining =/= 0.U
-    TPU.io.out(1)(1).ready := seReadsRemaining =/= 0.U
+    TPU.io.out(0)(0).ready := nwmacReadsRemaining =/= 0.U
+    TPU.io.out(0)(1).ready := nemacReadsRemaining =/= 0.U
+    TPU.io.out(1)(0).ready := swmacReadsRemaining =/= 0.U
+    TPU.io.out(1)(1).ready := semacReadsRemaining =/= 0.U
     
     // Defaults
 
@@ -456,126 +454,102 @@ class Top_parameterized(p: TPUParams) extends Module {
         val out = Valid(Vec(p.aRows, Vec(p.bCols, SInt(p.ow.W))))
 
     })
-    // 2x2 parametrized systolic array
-    val TPU = Module(new TPU_parameterized(p))
+    // --------------------------------------------Systolic Array and Mem--------------------------------------------
+    val TPU  = Module(new TPU_parameterized(p))
 
-    // Matrix Storage
+    // Local memory to flash input matrices to in idle state
+    // Local memory to flash input matrices to in idle state
     val aReg = Reg(Vec(p.aRows, Vec(p.aCols, SInt(p.iw.W))))
     val bReg = Reg(Vec(p.bRows, Vec(p.bCols, SInt(p.iw.W))))
     // Initialize output mat to zeros
     val cReg = RegInit(VecInit.tabulate(p.aRows)(_ =>
-                VecInit.fill(p.bCols)(0.S(p.ow.W))))
+                       VecInit.fill(p.bCols)(0.S(p.ow.W))))
 
-    // -1 is the idle state
-    // TODO Elaborate counter length as a function of the systolic array size
-    val writeCycle = new Counter(6)    // holds -1,0,1,2,3,4
-
-    // Registers representing times to read from MACs
+    // -----------------------------------------------Output Read Logic-----------------------------------------------
 
     // Stores previous values of each MAC output
-    val prevVal = VecInit.tabulate(p.cRows) { r =>
-        VecInit.tabulate(p.cCols) { c =>
+    val prevVal = VecInit.tabulate(p.sysw) { r =>
+        VecInit.tabulate(p.sysw) { c =>
             // each element is a RegNext of the matching out(r)(c).bits
             RegNext(TPU.io.out(r)(c).bits, 0.S(p.ow.W))
         }
     }
     // Remembers how many intermediate MAC outputs remain
-    val readsRemaining = RegInit(VecInit.tabulate(p.sysw)(_ =>
-                                 VecInit.fill(p.sysw)(0.U(log2Ceil(p.sysw).W))))
-
+    val macReadsRemaining = RegInit(VecInit.tabulate(p.sysW)(_ =>
+                                 VecInit.fill(p.sysW)(0.U(log2Ceil(p.sysW).W))))
 
     // MAC output is ready as long as thee are still outputs to be read
-    for (row <- 0 until p.cRows) {
-        for(col <- 0 until p.cCols) {
+    for (row <- 0 until p.sysw) {
+        for(col <- 0 until p.sysw) {
             TPU.io.out(row)(col).ready := readsRemaining(row)(col) =/= 0.U
         }
     }
 
     // When outresult is valid and nonzero and it can still be read, read it out
-    for (row <- 0 until p.cRows) {
-        for(col <- 0 until p.cCols) {
+    for (row <- 0 until p.sysw) {
+        for(col <- 0 until p.sysw) {
             when (TPU.io.out(row)(col).valid && TPU.io.out(row)(col).bits =/= prevVal(row)(col)) {
                 cReg(row)(col) := TPU.io.out(row)(col).bits
                 readsRemaining(row)(col) := readsRemaining(row)(col) - 1.U
             }
         }
     }    
-    // Defaults
+    // -----------------------------------------------FSM Logic and Mem-----------------------------------------------
+    object TPUState extends ChiselEnum { val idle, writing, reading, complete = Value }
+    val state      = RegInit(TPUState.idle)
 
-    // IO Data and Valid to Systolic Array Input
-    for (col <- 0 until p.aCols) {
-        TPU.io.inTop(col).valid := false.B
-        TPU.io.inTop(col).bits  := 0.S
+    val writeCycle = new Counter(p.maxWrites)
+    val readCycle  = new Counter(p.finalReads)
+
+    // ----------------------------------------------FSM State Definition----------------------------------------------
+    for (i <- 0 until p.sysW) {
+        // Restricts each input to send within the appropriate window
+        // Staggered each cycle from NW MAC, and should total the width of the systolic array
+        val sendWindow = (writeCycle.value >= i.U) && (writeCycle.value <  (i + p.sysW).U)
+        // When in send state and valid window, assign matrix element to corresponding
+        // systolic data input based on clock cycle
+        TPU.io.inLeft(i).valid := (state === TPUState.writing) && sendWindow
+        TPU.io.inLeft(i).bits  := aReg(i)(writeCycle.value - i.U)
+
+        TPU.io.inTop(i).valid := (state === TPUState.writing) && sendWindow
+        TPU.io.inTop(i).bits  := bReg(writeCycle.value - i.U)(i)
     }
 
-    for (row <- 0 until p.aRows) {
-        TPU.io.inLeft(row).valid := false.B
-        TPU.io.inLeft(row).bits  := 0.S
-    }
+    // ---------------------------------------------------Defaults---------------------------------------------------
 
     io.out.bits  := cReg
     io.out.valid := false.B
-    io.in.ready := true.B
+    io.in.ready  := true.B
+    TPU.io.clear := io.clear
 
-    val topReadySignals = TPU.io.inTop.map(_.ready)
-    val leftReadySignals = TPU.io.inLeft.map(_.ready)
+    // -----------------------------------------------------FSM-----------------------------------------------------
 
-    io.in.ready := topReadySignals.reduce(_ && _) && leftReadySignals.reduce(_ && _)
-
-
-    switch(writeCycle.value) {
-    // Flashes input matrices to local registers in state -1
-        is(0.U){
-            aReg := io.in.bits.a
-            bReg := io.in.bits.b
-            writeCycle.inc()  
+    switch(state) {
+        // When idle, flash local Matrix A and B storage
+        is(TPUState.idle) {
+            aReg  := io.in.bits.a
+            bReg  := io.in.bits.b
+            state := TPUState.writing  
         }
-        is(1.U) {
-            // First Write
-            TPU.io.inLeft(0).valid := true.B
-            TPU.io.inTop(0).valid := true.B
-
-            TPU.io.inLeft(0).bits := aReg(0)(0)
-            TPU.io.inTop(0).bits := bReg(0)(0)
-
-            writeCycle.inc()  
+        // When writing, data is written to each inTop and inLeft referring to writeCycle counter value
+        is(TPUState.writing) {
+            when (writeCycle.value === p.maxWrites.U - 1.U) { state := TPUState.reading }
+            .otherwise                                      { writeCycle.inc() }
         }
-        is(2.U) {
-            // Last write
-            TPU.io.inLeft(0).valid := true.B
-            TPU.io.inTop(0).valid := true.B
-            TPU.io.inLeft(0).bits := aReg(0)(1)
-            TPU.io.inTop(0).bits := bReg(1)(0)
-
-            // First Write
-            TPU.io.inLeft(1).valid := true.B
-            TPU.io.inTop(1).valid := true.B
-            TPU.io.inLeft(1).bits := aReg(1)(0)
-            TPU.io.inTop(1).bits := bReg(0)(1)
-
-
-            writeCycle.inc()  
+        // After final write, remaining reads take place
+        is(TPUState.reading) {
+            when (readCycle.value === p.finalReads.U - 1.U) { state := TPUState.complete }
+            .otherwise                                      { readCycle.inc() }
         }
-        is(3.U) {
-            // Last write
-            TPU.io.inLeft(1).valid := true.B
-            TPU.io.inTop(1).valid := true.B
-            TPU.io.inLeft(1).bits := aReg(1)(1)
-            TPU.io.inTop(1).bits := bReg(1)(1)
-
-            writeCycle.inc()  
-        }
-        is(4.U) {
-            writeCycle.inc()  
-
-        }
-        is(5.U) {
-            // Last read
-            writeCycle.inc()  
+        // TPU holds computed Matrix C on output until cleared
+        is(TPUState.complete) {
+            writeCycle.value := 0.U
+            readCycle.value  := 0.U
+            // Systolic array valid when final (SE) MAC is valid
+            io.out.bits  := cReg
+            io.out.valid := TPU.io.out(p.sysW.U - 1.U)(p.sysW.U - 1.U).valid
+            
+            when (io.clear) { state := TPUState.idle }
         }
     }
-    io.out.bits := cReg
-    io.out.valid := writeCycle.value === 5.U 
-
-    TPU.io.clear := io.clear
 }

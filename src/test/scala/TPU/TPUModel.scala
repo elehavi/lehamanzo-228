@@ -106,5 +106,8 @@ class TPUModel(p: TPUParams) {
       }
     }
   }
+<<<<<<< HEAD
 
+=======
+>>>>>>> 7b45b87080a45e0fb1865f157d4a7f0f5f2868f9
 }
