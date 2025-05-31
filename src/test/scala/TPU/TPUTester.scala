@@ -296,11 +296,67 @@ class parameterizedTPUTester extends AnyFlatSpec with ChiselScalatestTester {
       }
     }
   }
-  it should "multiply a 5x5 matrix" in {
-    val p = new TPUParams(8, 32, 5, 5, 5 ,5)
+  it should "multiply a 8x8 30% sparse matrix" in {
+    val p = new TPUParams(8, 32, 8, 8, 8 ,8)
 
     val rng = new Random(42)
     def randomElem(): Int = rng.nextInt(1 << p.iw) - (1 << (p.iw - 1))
+    def randomSparse(sparseProbability: Double): Int = {
+      if (rng.nextDouble() < sparseProbability) { 0 }
+      else                                      { randomElem() }
+    }
+
+    test(new Top_parameterized(p)).withAnnotations(Seq(WriteVcdAnnotation)) {
+      dut =>
+      /* ---------------- initialize random matrix inputs ---------------- */
+      val aInit: Array[Array[Int]] = Array.fill(p.aRows, p.aCols)(randomSparse(0.3))
+      val bInit: Array[Array[Int]] = Array.fill(p.bRows, p.bCols)(randomSparse(0.3))
+
+      val exp: Array[Array[Int]] = Array.ofDim[Int](p.aRows, p.bCols)
+      for (i <- 0 until p.aRows; j <- 0 until p.bCols) {
+        var sum = 0
+        for (k <- 0 until p.aCols) {
+          sum += aInit(i)(k) * bInit(k)(j)
+        }
+        exp(i)(j) = sum
+      }
+
+      /* ---------------- poke matrices ---------------- */
+      println("=== A matrix ===")
+      for (c <- 0 until p.aCols) {
+        for (r <- 0 until p.aRows) {
+          dut.io.in.bits.a(r)(c).poke(aInit(r)(c).S(p.iw.W))
+          print(f"${aInit(r)(c)}%4d ")
+        }
+        println()
+      }
+      println("=== B matrix ===")
+      for (c <- 0 until p.bCols) {
+        for (r <- 0 until p.bRows) {
+          dut.io.in.bits.b(r)(c).poke(bInit(r)(c).S(p.iw.W))
+          print(f"${bInit(r)(c)}%4d ")
+        }
+        println()
+      }
+            /* ------------- fire the bundle once ------------ */
+      dut.io.clear.poke(false.B)
+      dut.io.in.valid.poke(true.B)
+      dut.clock.step()            // cycle 0
+      dut.io.in.valid.poke(false.B)
+
+      /* ------------- pipeline latency ---------------- */
+      // Max writes + final reads
+      dut.clock.step(p.maxWrites + p.finalReads)           // cycles 1–2
+
+      println("=== C matrix ===")
+      for (c <- 0 until p.cCols) {
+        for (r <- 0 until p.cRows) {
+          dut.io.out.bits(r)(c).expect(exp(r)(c).S(p.ow.W))
+          print(f"${exp(r)(c)}%6d ")
+        }
+        println()
+      }
+    }
 
     test(new Top_parameterized(p)).withAnnotations(Seq(WriteVcdAnnotation)) {
       dut =>
