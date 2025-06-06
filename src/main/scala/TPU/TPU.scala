@@ -23,6 +23,9 @@ case class TPUParams (inputWidth: Int, outputWidth: Int, systolicArrayWidth: Int
 
     val cRows: Int = m
     val cCols: Int = n
+    
+    // Make sure matrices are compatible for multiplication
+    assert(aCols == bRows)
 }
 
 class TPU_parameterized(p: TPUParams) extends Module {
@@ -30,11 +33,11 @@ class TPU_parameterized(p: TPUParams) extends Module {
         val clear  = Input(Bool())
 
         // Vector inputs corresponding to top and left systolic array inputs
-        // Vector inputs corresponding to top and left systolic array inputs
-        val inTop  = Flipped(Vec(p.aCols,  Decoupled(SInt(p.iw.W))))
-        val inLeft = Flipped(Vec(p.aRows,  Decoupled(SInt(p.iw.W))))
+        // Fixed to specified systolic array width
+        val inTop  = Flipped(Vec(p.sysW,  Decoupled(SInt(p.iw.W))))
+        val inLeft = Flipped(Vec(p.sysW,  Decoupled(SInt(p.iw.W))))
 
-        val out    = Vec(p.aRows, Vec(p.bCols, Decoupled(SInt(p.ow.W))))
+        val out    = Vec(p.sysW, Vec(p.sysW, Decoupled(SInt(p.ow.W))))
     })
 
     // Systolic Array parameterized by TPU params
@@ -47,13 +50,20 @@ class TPU_parameterized(p: TPUParams) extends Module {
 
     // Link data and valid inputs from TPU io to Systolic Array
     for (i <- 0 until p.sysW) {
-        systolicArray(0)(i).io.inTop.valid := io.inTop(i).valid
-        systolicArray(0)(i).io.inTop.bits  := io.inTop(i).bits
-        io.inTop(i).ready                  := true.B
-
-        systolicArray(i)(0).io.inLeft.valid := io.inLeft(i).valid
-        systolicArray(i)(0).io.inLeft.bits  := io.inLeft(i).bits
-        io.inLeft(i).ready                  := true.B
+        if (i < p.bCols) {
+            systolicArray(0)(i).io.inTop <> io.inTop(i)
+        } else {
+            systolicArray(0)(i).io.inTop.valid := false.B
+            systolicArray(0)(i).io.inTop.bits := 0.S
+        }
+        if ( i < p.aRows) {
+            systolicArray(i)(0).io.inLeft <> io.inLeft(i)
+        } else {
+            systolicArray(i)(0).io.inLeft.valid := false.B
+            systolicArray(i)(0).io.inLeft.bits := 0.S
+        }
+        io.inTop(i).ready  := true.B
+        io.inLeft(i).ready := true.B
     }
 
 
@@ -112,7 +122,7 @@ class Top_parameterized(p: TPUParams) extends Module {
             val a = Vec(p.aRows, Vec(p.aCols, SInt(p.iw.W)))
             val b = Vec(p.bRows, Vec(p.bCols, SInt(p.iw.W)))
         }))
-        val out = Valid(Vec(p.aRows, Vec(p.bCols, SInt(p.ow.W))))
+        val out = Valid(Vec(p.sysW, Vec(p.sysW, SInt(p.ow.W))))
 
     })
     // --------------------------------------------Systolic Array and Mem--------------------------------------------
@@ -124,8 +134,8 @@ class Top_parameterized(p: TPUParams) extends Module {
     val bReg = Reg(Vec(p.bRows, Vec(p.bCols, SInt(p.iw.W))))
 
     // Initialize output mat to zeros
-    val cReg = RegInit(VecInit.tabulate(p.aRows)(_ =>
-                       VecInit.fill(p.bCols)(0.S(p.ow.W))))
+    val cReg = RegInit(VecInit.tabulate(p.sysW)(_ =>
+                       VecInit.fill(p.sysW)(0.S(p.ow.W))))
     // Representaion Matrices
     val aRep = Reg(Vec(p.aRows, Vec(p.aCols, Bool())))
     val bRep = Reg(Vec(p.bRows, Vec(p.bCols, Bool())))
@@ -150,23 +160,13 @@ class Top_parameterized(p: TPUParams) extends Module {
             RegNext(TPU.io.out(r)(c).bits, 0.S(p.ow.W))
         }
     }
-    // Remembers how many intermediate MAC outputs remain
-    val macReadsRemaining = RegInit(VecInit.tabulate(p.sysW)(_ =>
-                                 VecInit.fill(p.sysW)(0.U(log2Ceil(p.sysW).W))))
-
-    // MAC output is ready as long as thee are still outputs to be read
-    for (row <- 0 until p.sysW) {
-        for(col <- 0 until p.sysW) {
-            TPU.io.out(row)(col).ready := macReadsRemaining(row)(col) =/= 0.U
-        }
-    }
 
     // When outresult is valid and nonzero and it can still be read, read it out
     for (row <- 0 until p.sysW) {
         for(col <- 0 until p.sysW) {
+            TPU.io.out(row)(col).ready := true.B
             when (TPU.io.out(row)(col).valid && TPU.io.out(row)(col).bits =/= prevVal(row)(col)) {
                 cReg(row)(col) := TPU.io.out(row)(col).bits
-                macReadsRemaining(row)(col) := macReadsRemaining(row)(col) - 1.U
             }
         }
     }    
@@ -182,21 +182,45 @@ class Top_parameterized(p: TPUParams) extends Module {
         // Restricts each input to send within the appropriate window
         // Staggered each cycle from NW MAC, and should total the width of the systolic array
         val sendWindow = (writeCycle.value >= i.U) && (writeCycle.value <  (i + p.sysW).U)
+        val rowA_Data  = i < p.aRows
+        val colB_Data  = i < p.bCols
+
+        val col_Idx    = writeCycle.value - i.U
+        val colA_Data  = col_Idx < p.aCols.U
+        val rowB_Data   = col_Idx < p.bRows.U
+
         // When in send state and valid window, assign matrix element to corresponding
         // systolic data input based on clock cycle
-        TPU.io.inLeft(i).valid := (state === TPUState.writing) && sendWindow
-        when(sendWindow && aRepWire(i)(writeCycle.value - i.U)) {
-            TPU.io.inLeft(i).bits    := aReg(i)(writeCycle.value - i.U)
-        } .otherwise {
-            TPU.io.inLeft(i).bits    := 0.S
+        TPU.io.inLeft(i).valid := (state === TPUState.writing) && sendWindow && rowA_Data.B && colA_Data
+        TPU.io.inLeft(i).bits := 0.S
+        if (rowA_Data) {
+            when(sendWindow && aRepWire(i)(col_Idx) && colA_Data) {
+                TPU.io.inLeft(i).bits    := aReg(i)(col_Idx)
+            }
         }
-        TPU.io.inTop(i).valid := (state === TPUState.writing) && sendWindow
-        when(sendWindow && bRepWire(writeCycle.value - i.U)(i)) {
-            TPU.io.inTop(i).bits   := bReg(writeCycle.value - i.U)(i)
-        } .otherwise {
-            TPU.io.inTop(i).bits  := 0.S
+        TPU.io.inTop(i).valid := (state === TPUState.writing) && sendWindow && rowB_Data && colB_Data.B
+        TPU.io.inTop(i).bits := 0.S
+        if (colB_Data) {
+            when(sendWindow && bRepWire(col_Idx)(i) && rowB_Data && colB_Data.B) {
+                TPU.io.inTop(i).bits   := bReg(col_Idx)(i)
+            }
         }
     }
+
+    // for (i <- 0 until p.sysW) {
+    //     // Restricts each input to send within the appropriate window
+    //     // Staggered each cycle from NW MAC, and should total the width of the systolic array
+
+    //     val sendWindow = (writeCycle.value >= i.U) && (writeCycle.value <  (i + p.sysW).U)
+    //     // When in send state and valid window, assign matrix element to corresponding
+    //     // systolic data input based on clock cycle
+        
+    //     TPU.io.inLeft(i).valid := (state === TPUState.writing) && sendWindow
+    //     TPU.io.inLeft(i).bits  := aReg(i)(writeCycle.value - i.U)
+
+    //     TPU.io.inTop(i).valid := (state === TPUState.writing) && sendWindow
+    //     TPU.io.inTop(i).bits  := bReg(writeCycle.value - i.U)(i)
+    // }
 
     // ---------------------------------------------------Defaults---------------------------------------------------
 
@@ -204,6 +228,7 @@ class Top_parameterized(p: TPUParams) extends Module {
     io.out.valid := false.B
     io.in.ready  := true.B
     TPU.io.clear := io.clear
+    
 
     // -----------------------------------------------------FSM-----------------------------------------------------
 
