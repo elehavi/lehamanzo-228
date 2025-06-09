@@ -5,15 +5,11 @@ import chisel3.internal.firrtl.Width
 import chisel3.util._
 
 case class TPUParams (inputWidth: Int, outputWidth: Int, systolicArrayWidth: Int, m: Int, k: Int, n: Int) {
-    // TODO: parametrize matrix size.
     // A (m x k) X B (k x n) = C (m x n)
-    val iw: Int = inputWidth // Input bitwidth
+    val iw: Int = inputWidth
     val ow: Int = outputWidth
 
     val sysW: Int = systolicArrayWidth
-
-    val maxWrites = (systolicArrayWidth * 2)
-    val finalReads = (systolicArrayWidth - 1)
 
     val aRows: Int = m
     val aCols: Int = k
@@ -24,6 +20,9 @@ case class TPUParams (inputWidth: Int, outputWidth: Int, systolicArrayWidth: Int
     val cRows: Int = m
     val cCols: Int = n
     
+    val maxWrites = (aCols + systolicArrayWidth)
+    val finalReads = (systolicArrayWidth + 1)
+
     // Make sure matrices are compatible for multiplication
     assert(aCols == bRows)
 }
@@ -136,91 +135,102 @@ class Top_parameterized(p: TPUParams) extends Module {
     // Initialize output mat to zeros
     val cReg = RegInit(VecInit.tabulate(p.sysW)(_ =>
                        VecInit.fill(p.sysW)(0.S(p.ow.W))))
-    // Representaion Matrices
+
+    // Representaion Matrices and wires for naive sparse implementation
     val aRep = Reg(Vec(p.aRows, Vec(p.aCols, Bool())))
     val bRep = Reg(Vec(p.bRows, Vec(p.bCols, Bool())))
 
     val aRepWire = Wire(Vec(p.aRows, Vec(p.aCols, Bool())))
     val bRepWire = Wire(Vec(p.bRows, Vec(p.bCols, Bool())))
 
-    // Create Representation Matrices
+    // Initialize Representation Matrices (true if data, false if zero)
     for (row <- 0 until p.aRows; col <- 0 until p.aCols) {
         aRepWire(row)(col) := aReg(row)(col) =/= 0.S
     }
     for (row <- 0 until p.bRows; col <- 0 until p.bCols) {
         bRepWire(row)(col) := bReg(row)(col) =/= 0.S
     }
-
-    // -----------------------------------------------Output Read Logic-----------------------------------------------
-
-    // Stores previous values of each MAC output
-    val prevVal = VecInit.tabulate(p.sysW) { r =>
-        VecInit.tabulate(p.sysW) { c =>
-            // each element is a RegNext of the matching out(r)(c).bits
-            RegNext(TPU.io.out(r)(c).bits, 0.S(p.ow.W))
-        }
-    }
-
-    // When outresult is valid and nonzero and it can still be read, read it out
-    for (row <- 0 until p.sysW) {
-        for(col <- 0 until p.sysW) {
-            TPU.io.out(row)(col).ready := true.B
-            when (TPU.io.out(row)(col).valid && TPU.io.out(row)(col).bits =/= prevVal(row)(col)) {
-                cReg(row)(col) := TPU.io.out(row)(col).bits
-            }
-        }
-    }    
     // -----------------------------------------------FSM Logic and Mem-----------------------------------------------
-    object TPUState extends ChiselEnum { val idle, writing, reading, complete = Value }
+    object TPUState extends ChiselEnum { val idle, writing, reading, rewind, complete = Value }
     val state      = RegInit(TPUState.idle)
 
     val writeCycle = new Counter(p.maxWrites)
     val readCycle  = new Counter(p.finalReads)
 
+    // Ceiling division for tile number
+    val rowTiles  = (p.aRows + p.sysW - 1) / p.sysW
+    val colTiles  = (p.bCols + p.sysW - 1) / p.sysW
+    val tileNum   = rowTiles*colTiles
+    // Addressing tiles in column major order
+    val nTiles = math.max(1,rowTiles*colTiles)
+    val tileIdx = RegInit(0.U(log2Ceil(nTiles).W))
+
+    // # columns is how many rows processed so far
+    val colIdx = tileIdx / rowTiles.U
+    // # of rows per column is the remainder
+    val rowIdx = tileIdx % rowTiles.U
     // ----------------------------------------------FSM State Definition----------------------------------------------
+
+    val partialProductsPerTile = p.aCols
     for (i <- 0 until p.sysW) {
+        // Index for partial product addressing
+        val ppIdx    = writeCycle.value - i.U
         // Restricts each input to send within the appropriate window
         // Staggered each cycle from NW MAC, and should total the width of the systolic array
-        val sendWindow = (writeCycle.value >= i.U) && (writeCycle.value <  (i + p.sysW).U)
-        val rowA_Data  = i < p.aRows
-        val colB_Data  = i < p.bCols
+        val sendWindow = ppIdx < partialProductsPerTile.U
 
-        val col_Idx    = writeCycle.value - i.U
-        val colA_Data  = col_Idx < p.aCols.U
-        val rowB_Data   = col_Idx < p.bRows.U
+        // Row to assign to inleft vector
+        val aRow = rowIdx * p.sysW.U + i.U
+
+        // Common Dimension
+        val aCol = ppIdx
+        val bRow = ppIdx
+
+        // Col to assign to inTop vector
+        val bCol = colIdx * p.sysW.U + i.U
+
+        val rowA_Data  = aRow < p.aRows.U
+        val colA_Data  = aCol < p.aCols.U
+        
+        val rowB_Data  = bRow < p.bRows.U
+        val colB_Data  = bCol < p.bCols.U
 
         // When in send state and valid window, assign matrix element to corresponding
         // systolic data input based on clock cycle
-        TPU.io.inLeft(i).valid := (state === TPUState.writing) && sendWindow && rowA_Data.B && colA_Data
-        TPU.io.inLeft(i).bits := 0.S
-        if (rowA_Data) {
-            when(sendWindow && aRepWire(i)(col_Idx) && colA_Data) {
-                TPU.io.inLeft(i).bits    := aReg(i)(col_Idx)
+
+        TPU.io.inLeft(i).valid := (state === TPUState.writing) && sendWindow && rowA_Data && colA_Data
+
+        TPU.io.inLeft(i).bits  := Mux(rowA_Data && colA_Data && aRepWire(aRow)(aCol),
+                                    aReg(aRow)(aCol),
+                                    0.S)
+
+        TPU.io.inTop(i).valid  := (state === TPUState.writing) && sendWindow && rowB_Data && colB_Data
+
+        TPU.io.inTop(i).bits   := Mux(rowB_Data && colB_Data && bRepWire(bRow)(bCol),
+                                    bReg(bRow)(bCol),
+                                    0.S)
+    }
+    // -----------------------------------------------Output Read Logic-----------------------------------------------
+    
+    // cycles depends on common dimension aCols/bRows 
+    val macReadsRemaining = RegInit(VecInit.tabulate(p.sysW)(_ =>
+                                 VecInit.fill(p.sysW)(partialProductsPerTile.U)))
+
+    // MAC output is ready as long as there are still outputs to be read
+    for (row <- 0 until p.sysW) {
+        for(col <- 0 until p.sysW) {
+            TPU.io.out(row)(col).ready := macReadsRemaining(row)(col) =/= 0.U
+            // TPU out is valid and ready
+            when (TPU.io.out(row)(col).fire) {
+                cReg(row)(col) := TPU.io.out(row)(col).bits
+                macReadsRemaining(row)(col) := macReadsRemaining(row)(col) - 1.U
             }
-        }
-        TPU.io.inTop(i).valid := (state === TPUState.writing) && sendWindow && rowB_Data && colB_Data.B
-        TPU.io.inTop(i).bits := 0.S
-        if (colB_Data) {
-            when(sendWindow && bRepWire(col_Idx)(i) && rowB_Data && colB_Data.B) {
-                TPU.io.inTop(i).bits   := bReg(col_Idx)(i)
+            when (state === TPUState.rewind) {
+                macReadsRemaining(row)(col) := partialProductsPerTile.U
+                cReg(row)(col)              := 0.S
             }
         }
     }
-
-    // for (i <- 0 until p.sysW) {
-    //     // Restricts each input to send within the appropriate window
-    //     // Staggered each cycle from NW MAC, and should total the width of the systolic array
-
-    //     val sendWindow = (writeCycle.value >= i.U) && (writeCycle.value <  (i + p.sysW).U)
-    //     // When in send state and valid window, assign matrix element to corresponding
-    //     // systolic data input based on clock cycle
-        
-    //     TPU.io.inLeft(i).valid := (state === TPUState.writing) && sendWindow
-    //     TPU.io.inLeft(i).bits  := aReg(i)(writeCycle.value - i.U)
-
-    //     TPU.io.inTop(i).valid := (state === TPUState.writing) && sendWindow
-    //     TPU.io.inTop(i).bits  := bReg(writeCycle.value - i.U)(i)
-    // }
 
     // ---------------------------------------------------Defaults---------------------------------------------------
 
@@ -228,7 +238,6 @@ class Top_parameterized(p: TPUParams) extends Module {
     io.out.valid := false.B
     io.in.ready  := true.B
     TPU.io.clear := io.clear
-    
 
     // -----------------------------------------------------FSM-----------------------------------------------------
 
@@ -237,22 +246,35 @@ class Top_parameterized(p: TPUParams) extends Module {
         is(TPUState.idle) {
             aReg  := io.in.bits.a
             bReg  := io.in.bits.b
-            state := TPUState.writing  
+            TPU.io.clear := true.B  
+            state := TPUState.writing
         }
         // When writing, data is written to each inTop and inLeft referring to writeCycle counter value
         is(TPUState.writing) {
+            TPU.io.clear := false.B
             when (writeCycle.value === p.maxWrites.U - 1.U) { state := TPUState.reading }
             .otherwise                                      { writeCycle.inc() }
         }
         // After final write, remaining reads take place
         is(TPUState.reading) {
-            when (readCycle.value === p.finalReads.U - 1.U) { state := TPUState.complete }
-            .otherwise                                      { readCycle.inc() }
+            when (readCycle.value === (p.finalReads - 1).U) { 
+                when (tileIdx === (tileNum - 1).U) { state := TPUState.complete }
+                .otherwise { state := TPUState.rewind }
+            }
+            .otherwise { readCycle.inc() }
+        }
+        // Extra cycle to reset counters and systolic array state
+        is(TPUState.rewind) {
+            readCycle.reset()
+            writeCycle.reset()
+            tileIdx := tileIdx + 1.U
+            TPU.io.clear := true.B
+            state := TPUState.writing
         }
         // TPU holds computed Matrix C on output until cleared
         is(TPUState.complete) {
-            writeCycle.value := 0.U
-            readCycle.value  := 0.U
+            readCycle.reset()
+            writeCycle.reset()
             // Systolic array valid when final (SE) MAC is valid
             io.out.bits  := cReg
             io.out.valid := TPU.io.out(p.sysW.U - 1.U)(p.sysW.U - 1.U).valid
