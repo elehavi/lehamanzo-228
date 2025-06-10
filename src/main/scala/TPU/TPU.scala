@@ -3,28 +3,33 @@ package tpu
 import chisel3._
 import chisel3.internal.firrtl.Width
 import chisel3.util._
+import os.write
 
-case class TPUParams (inputWidth: Int, outputWidth: Int, systolicArrayWidth: Int, m: Int, k: Int, n: Int) {
+case class TPUParams (inputWidth: Int, outputWidth: Int, systolicArrayWidth: Int, m: Int, k: Int, n: Int, conv: Boolean) {
     // A (m x k) X B (k x n) = C (m x n)
+    // If Conv, m = kernel height and width (square)
+    //          k = channels (one for now)
+    //          n = input activation height and width (square)
     val iw: Int = inputWidth
     val ow: Int = outputWidth
 
     val sysW: Int = systolicArrayWidth
 
+    val partialProductsPerTile: Int = if(conv) m*m*k else k
+
     val aRows: Int = m
-    val aCols: Int = k
+    val aCols: Int = if(conv) m else k
 
-    val bRows: Int = k
+    val bRows: Int = if(conv) n else k
     val bCols: Int = n
-
-    val cRows: Int = m
-    val cCols: Int = n
     
-    val maxWrites = (aCols + systolicArrayWidth)
+    val cRows: Int = if(conv) 1 else aRows
+    val cCols: Int = if(conv) (n-1)*(n-1) else bCols
+
+    
+    val maxWrites = (partialProductsPerTile + systolicArrayWidth)
     val finalReads = (systolicArrayWidth + 1)
 
-    // Make sure matrices are compatible for multiplication
-    assert(aCols == bRows)
 }
 
 class TPU_parameterized(p: TPUParams) extends Module {
@@ -49,18 +54,9 @@ class TPU_parameterized(p: TPUParams) extends Module {
 
     // Link data and valid inputs from TPU io to Systolic Array
     for (i <- 0 until p.sysW) {
-        if (i < p.bCols) {
-            systolicArray(0)(i).io.inTop <> io.inTop(i)
-        } else {
-            systolicArray(0)(i).io.inTop.valid := false.B
-            systolicArray(0)(i).io.inTop.bits := 0.S
-        }
-        if ( i < p.aRows) {
-            systolicArray(i)(0).io.inLeft <> io.inLeft(i)
-        } else {
-            systolicArray(i)(0).io.inLeft.valid := false.B
-            systolicArray(i)(0).io.inLeft.bits := 0.S
-        }
+        systolicArray(0)(i).io.inTop <> io.inTop(i)
+        systolicArray(i)(0).io.inLeft <> io.inLeft(i)
+        
         io.inTop(i).ready  := true.B
         io.inLeft(i).ready := true.B
     }
@@ -171,50 +167,93 @@ class Top_parameterized(p: TPUParams) extends Module {
     val rowIdx = tileIdx % rowTiles.U
     // ----------------------------------------------FSM State Definition----------------------------------------------
 
-    val partialProductsPerTile = p.aCols
-    for (i <- 0 until p.sysW) {
-        // Index for partial product addressing
-        val ppIdx    = writeCycle.value - i.U
-        // Restricts each input to send within the appropriate window
-        // Staggered each cycle from NW MAC, and should total the width of the systolic array
-        val sendWindow = ppIdx < partialProductsPerTile.U
+    if (p.conv) {
+        for (i <- 0 until p.sysW) {
+            val ppIdx    = writeCycle.value - i.U
+            
+            val sendWindow = ppIdx < p.partialProductsPerTile.U
 
-        // Row to assign to inleft vector
-        val aRow = rowIdx * p.sysW.U + i.U
+            // im2Col implementation
+            val startRow = i.U / (p.n - p.m + 1).U
+            val startcol = i.U % (p.n - p.m + 1).U
 
-        // Common Dimension
-        val aCol = ppIdx
-        val bRow = ppIdx
+            val rowOffset = ppIdx / p.m.U
+            val colOffset = ppIdx % p.m.U
 
-        // Col to assign to inTop vector
-        val bCol = colIdx * p.sysW.U + i.U
+            val aRow = rowOffset
+            val aCol = colOffset
 
-        val rowA_Data  = aRow < p.aRows.U
-        val colA_Data  = aCol < p.aCols.U
-        
-        val rowB_Data  = bRow < p.bRows.U
-        val colB_Data  = bCol < p.bCols.U
+            val bRow = startRow + rowOffset
+            val bCol = startcol + colOffset
 
-        // When in send state and valid window, assign matrix element to corresponding
-        // systolic data input based on clock cycle
+            val rowA_Data  = aRow < p.aRows.U
+            val colA_Data  = aCol < p.aCols.U
+            
+            val rowB_Data  = bRow < p.bRows.U
+            val colB_Data  = bCol < p.bCols.U
 
-        TPU.io.inLeft(i).valid := (state === TPUState.writing) && sendWindow && rowA_Data && colA_Data
+            // When in send state and valid window, assign matrix element to corresponding
+            // systolic data input based on clock cycle
 
-        TPU.io.inLeft(i).bits  := Mux(rowA_Data && colA_Data && aRepWire(aRow)(aCol),
-                                    aReg(aRow)(aCol),
-                                    0.S)
+            TPU.io.inLeft(i).valid := (state === TPUState.writing) && sendWindow && rowA_Data && colA_Data
 
-        TPU.io.inTop(i).valid  := (state === TPUState.writing) && sendWindow && rowB_Data && colB_Data
+            TPU.io.inLeft(i).bits  := Mux(rowA_Data && colA_Data && aRepWire(aRow)(aCol),
+                                        aReg(aRow)(aCol),
+                                        0.S)
 
-        TPU.io.inTop(i).bits   := Mux(rowB_Data && colB_Data && bRepWire(bRow)(bCol),
-                                    bReg(bRow)(bCol),
-                                    0.S)
+            TPU.io.inTop(i).valid  := (state === TPUState.writing) && sendWindow && rowB_Data && colB_Data
+
+            TPU.io.inTop(i).bits   := Mux(rowB_Data && colB_Data && bRepWire(bRow)(bCol),
+                                        bReg(bRow)(bCol),
+                                        0.S)
+
+        }
+    }
+    else {
+        for (i <- 0 until p.sysW) {
+            val ppIdx    = writeCycle.value - i.U
+            // Index for partial product addressing
+            // Restricts each input to send within the appropriate window
+            // Staggered each cycle from NW MAC, and should total the width of the systolic array
+            val sendWindow = ppIdx < p.partialProductsPerTile.U
+
+            // Row to assign to inleft vector
+            val aRow = rowIdx * p.sysW.U + i.U
+
+            // Common Dimension
+            val aCol = ppIdx
+            val bRow = ppIdx
+
+            // Col to assign to inTop vector
+            val bCol = colIdx * p.sysW.U + i.U
+
+            val rowA_Data  = aRow < p.aRows.U
+            val colA_Data  = aCol < p.aCols.U
+            
+            val rowB_Data  = bRow < p.bRows.U
+            val colB_Data  = bCol < p.bCols.U
+
+            // When in send state and valid window, assign matrix element to corresponding
+            // systolic data input based on clock cycle
+
+            TPU.io.inLeft(i).valid := (state === TPUState.writing) && sendWindow && rowA_Data && colA_Data
+
+            TPU.io.inLeft(i).bits  := Mux(rowA_Data && colA_Data && aRepWire(aRow)(aCol),
+                                        aReg(aRow)(aCol),
+                                        0.S)
+
+            TPU.io.inTop(i).valid  := (state === TPUState.writing) && sendWindow && rowB_Data && colB_Data
+
+            TPU.io.inTop(i).bits   := Mux(rowB_Data && colB_Data && bRepWire(bRow)(bCol),
+                                        bReg(bRow)(bCol),
+                                        0.S)
+        }
     }
     // -----------------------------------------------Output Read Logic-----------------------------------------------
     
     // cycles depends on common dimension aCols/bRows 
     val macReadsRemaining = RegInit(VecInit.tabulate(p.sysW)(_ =>
-                                 VecInit.fill(p.sysW)(partialProductsPerTile.U)))
+                                 VecInit.fill(p.sysW)(p.partialProductsPerTile.U)))
 
     // MAC output is ready as long as there are still outputs to be read
     for (row <- 0 until p.sysW) {
@@ -226,7 +265,7 @@ class Top_parameterized(p: TPUParams) extends Module {
                 macReadsRemaining(row)(col) := macReadsRemaining(row)(col) - 1.U
             }
             when (state === TPUState.rewind) {
-                macReadsRemaining(row)(col) := partialProductsPerTile.U
+                macReadsRemaining(row)(col) := p.partialProductsPerTile.U
                 cReg(row)(col)              := 0.S
             }
         }
