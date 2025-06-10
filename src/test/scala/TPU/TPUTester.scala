@@ -47,9 +47,6 @@ class MACTester extends AnyFlatSpec with ChiselScalatestTester {
       dut.io.outResult.valid.expect(false.B)
     }
   }
-  it should "not send outputs unless ready" in {
-    // TODO: implement later. figure out ready signals as we connect MAC's
-  }
   it should "do one round of multiplication" in {
     val p = new macParams(8, 32)
     test(new MAC(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
@@ -175,34 +172,36 @@ it should "do one round of multiplication, clear, and do another round" in {
 
 class TPUModelTester extends AnyFlatSpec with ChiselScalatestTester {
    behavior of "TPUModel"
-  it should "handle one round of inputs" in {
-    val p = TPUParams(8, 16, 2, 2, 2, 2, false)
-    val tpu = new TPUModel(p)
-    tpu.progressOneCycle(Seq(1,2), Seq(1,2))
-    val expected = Array(Array(Array(1,1,1), Array(0,0,2)), Array(Array(0,2,0), Array(0,0,0)))
-    for (row <- 0 until 2) {
-      for (col <- 0 until 2) {
-        for (elt <- 0 until 3) {
-          assert(tpu.sysArray(row)(col)(elt) == expected(row)(col)(elt))
-        }
-      }
-    }
-  }
+  
   it should "complete simple matrix multiplication" in {
+    /* 
+     1 2    1 1
+     1 1  x 2 1
+     should be
+     2 3
+     3 4
+     */
     val p = TPUParams(8, 16, 2, 2, 2, 2, false)
     val tpu = new TPUModel(p)
-    tpu.progressOneCycle(Seq(1,0), Seq(1,0))
-    tpu.progressOneCycle(Seq(1,2), Seq(1,2))
-    tpu.progressOneCycle(Seq(0,1), Seq(0,1))
-    val expected = Array(Array(Array(2,0,0), Array(3,1,1)), Array(Array(3,1,1), Array(4,2,2)))
+    val expected = Array(Array(2,3), Array(3,5))
+    tpu.formatForInput(Seq(Seq(1,1), Seq(2,1)), Seq(Seq(1,2),Seq(1,1)))
+    
+    tpu.progressOneCycle()
+    assert(tpu.cycleCount == 1)
+    tpu.progressOneCycle()
+    assert(tpu.cycleCount == 2)
+    tpu.progressOneCycle()
+    assert(tpu.cycleCount == 3)
+    tpu.progressOneCycle()
+    assert(tpu.cycleCount == 4)
+    tpu.transpose()
+
     for (r <- 0 until 2) {
       for (c <- 0 until 2) {
-        for (e <- 0 until 3) {
-          assert(tpu.sysArray(r)(c)(e) == expected(r)(c)(e))
-        }
+        assert(tpu.cReg(r)(c) == expected(r)(c))
       }
     }
-    
+  
   }
 }
 
@@ -236,7 +235,7 @@ class parameterizedTPUTester extends AnyFlatSpec with ChiselScalatestTester {
       // NW = 1 × 5
       dut.io.out.bits(0)(0).expect(5.S)
 
-      // TODO: add TPU Model comparison.
+      
 
       dut.clock.step()            // cycle 3
 
@@ -701,6 +700,5 @@ class parameterizedTPUTester extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 }
-
 
 
