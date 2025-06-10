@@ -1,7 +1,7 @@
 Parametrized TPU 
 =======================
 
-This project is an in-progress TPU generator. Both MAC bit width and systolic array size will be parametrized.
+This project is a TPU generator. Both MAC bit width and systolic array size are parametrized.
 
 # How to Run #
 
@@ -11,7 +11,8 @@ This project is an in-progress TPU generator. Both MAC bit width and systolic ar
 # Progress #
 ## Completed ##
 - Parametrized TPU and TPU model are functional and pass tests.
--
+- TPU has parameters for and handles convolution and sparsity.
 ## Future Work ##
 - Integrate more of the model into testing with TPU. Model convolution and sparsity.
-- 
+- Tiling to allow matrices larger than the systolic array.
+
