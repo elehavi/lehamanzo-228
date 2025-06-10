@@ -530,28 +530,28 @@ class parameterizedTPUTester extends AnyFlatSpec with ChiselScalatestTester {
       val rowTiles = (p.cRows + p.sysW - 1) / p.sysW
       val colTiles = (p.cCols + p.sysW - 1) / p.sysW
       
-      // println("=== A matrix ===")
-      // for (r <- 0 until p.aRows) {
-      //   for (c <- 0 until p.aCols) {
-      //     print(f"${aInit(r)(c)}%4d ")
-      //   }
-      //   println()
-      // }
-      // println("=== B matrix ===")
-      // for (r <- 0 until p.bRows) {
-      //   for (c <- 0 until p.bCols) {
-      //     print(f"${bInit(r)(c)}%4d ")
-      //   }
-      //   println()
-      // }
+      println("=== A matrix ===")
+      for (r <- 0 until p.aRows) {
+        for (c <- 0 until p.aCols) {
+          print(f"${aInit(r)(c)}%4d ")
+        }
+        println()
+      }
+      println("=== B matrix ===")
+      for (r <- 0 until p.bRows) {
+        for (c <- 0 until p.bCols) {
+          print(f"${bInit(r)(c)}%4d ")
+        }
+        println()
+      }
 
-      // println("=== C matrix ===")
-      // for (r <- 0 until p.cRows) {
-      //   for (c <- 0 until p.cCols) {
-      //     print(f"${exp(r)(c)}%4d ")
-      //   }
-      //   println()
-      // }
+      println("=== C matrix ===")
+      for (r <- 0 until p.cRows) {
+        for (c <- 0 until p.cCols) {
+          print(f"${exp(r)(c)}%4d ")
+        }
+        println()
+      }
 
       for (tC <- 0 until colTiles;   // column index  ← outer loop
           tR <- 0 until rowTiles) { // row index     ← inner loop
@@ -678,23 +678,16 @@ class parameterizedTPUTester extends AnyFlatSpec with ChiselScalatestTester {
         // wait for this tile to finish
         dut.clock.step(p.maxWrites + p.finalReads)
 
-      println("=== actual matrix ===")
-      for (r <- 0 until p.cRows) {
-        for (c <- 0 until p.cCols) {
-          print(f"${dut.io.out.bits(r)(c).peek().litValue.toInt}%6d ")
-        }
-        println()
-      }
-      // for (tr <- 0 until p.sysW; tc <- 0 until p.sysW) {
-      //   val r = tR * p.sysW + tr   // global row
-      //   val c = tC * p.sysW + tc   // global col
+        for (tr <- 0 until p.sysW; tc <- 0 until p.sysW) {
+          val r = tR * p.sysW + tr   // global row
+          val c = tC * p.sysW + tc   // global col
 
-      //   if (r < p.cRows && c < p.cCols)
-      //     dut.io.out.bits(tr)(tc).expect(
-      //       exp(r)(c).S(p.ow.W),
-      //       s"Mismatch at C($r,$c) located in tile ($tR,$tC) / local ($tr,$tc)"
-      //     )
-      // }
+          if (r < p.cRows && c < p.cCols)
+            dut.io.out.bits(tr)(tc).expect(
+              exp(r)(c).S(p.ow.W),
+              s"Mismatch at C($r,$c) located in tile ($tR,$tC) / local ($tr,$tc)"
+            )
+        }
       }
     }
   }
