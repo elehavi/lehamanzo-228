@@ -10,9 +10,8 @@ This project is an in-progress TPU generator. Both MAC bit width and systolic ar
 
 # Progress #
 ## Completed ##
-- Multiply-and-accumulate unit runs and is parametrizable by data width.
-- A fixed size prototype of the TPU (TPU_fixed) has basic IO wiring.
-- fixedTPUModel models the behavior of TPU_fixed for testing purposes
-## In progress ##
-- TPU_fixed needs to calculate results.
-- We are working to convert TPU_fixed into a parametrized version and to build a parametrized model.
+- Parametrized TPU and TPU model are functional and pass tests.
+-
+## Future Work ##
+- Integrate more of the model into testing with TPU. Model convolution and sparsity.
+- 
