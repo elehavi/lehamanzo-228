@@ -30,9 +30,6 @@ object MatMulModel {
 
 class fixedTPUModel() {
   type Matrix = Seq[Seq[Int]]
-  // represents the output/input of overall TPU
-  // format: (systolic array, outRight, outBottom)
-  type TPUIO = (Matrix, Array[Int], Array[Int])
 
   // format of element of sysarray: (currResult, outRight, outBottom)
   // represent the systolic array
@@ -68,42 +65,61 @@ class fixedTPUModel() {
     }
   }
 }
-class TPUModel(p: TPUParams) {
-  type Matrix = Seq[Seq[Int]]
-  // represents the output/input of overall TPU
-  // format: (systolic array, outRight, outBottom)
-  type TPUIO = (Matrix, Array[Int], Array[Int])
 
+
+class TPUModel(p: TPUParams) {
+  type Matrix = Seq[Seq[Int]] 
+
+  // ----------------------------------------------Systolic Array Model----------------------------------------------
   // format of element of sysarray: (currResult, outRight, outBottom)
   // represent the systolic array
-  val sysArray = Array.fill(p.aRows)(Array.fill(p.bCols)(Array(0,0,0)))
+  val sysArray = Array.fill(p.sysW)(Array.fill(p.sysW)(Array(0,0,0)))
+  var cycleCount = 0
 
   def progressOneCycle(inTop: Seq[Int], inLeft: Seq[Int]): Unit = {
-    // for each row and column, if you are on the top/left edge, take input from module
-    // else, take input from previous mac.
-    // multiply and accumulate.
-    // printf("inTop: (%d,%d)\n", inTop(0), inTop(1))
-    // printf("inLeft: (%d,%d)\n", inLeft(0), inLeft(1))
-   
-    for (i <- (p.aRows-1) to 0 by -1) { 
-      for (j <- (p.bCols-1) to 0 by -1) {
-        var it = 0
-        var il = 0
+    // for every mac in the systolic array...   
+    for (i <- (p.sysW-1) to 0 by -1) { 
+      for (j <- (p.sysW-1) to 0 by -1) {
+        var it = 0 // inTop, will be passed out to bottom
+        var il = 0 // inLeft, will be passed out to right
+
+        // if we are in the top row, take input from IO.
         if(i==0) {
           it = inTop(j)
-        } else {
+        } else { // otherwise, grab from the MAC above the current one
           it = sysArray(i-1)(j)(2)
         }
 
+        // same thing for inputs from the left.
         if(j==0) {
           il = inLeft(i)
           } else {
             il = sysArray(i)(j-1)(1)
             }
-        // printf("(%d,%d): inTop %d, inLeft %d, current result %d \n", i,j,it,il,sysArray(i)(j)(0))
+        
+        // calculate the product and add it to the running sum
         val currResult = it * il + sysArray(i)(j)(0)
+        // update the running sum, outright, and outbottom.
         sysArray(i)(j) = Array(currResult, il, it)
       }
+    }
+  }
+
+  // ----------------------------------------------Top/IO Formatting Model----------------------------------------------
+  // topVecs and leftVecs represents the vectors containing elements of a/b and 0's that will be passed into the sysArray
+  // element n of topVecs/leftVecs will be passed in on cycle n. 
+  val topVecs = Array.fill(p.aRows + p.sysW-1)(Array.fill(p.aCols)(0)) 
+  val leftVecs = Array.fill(p.bRows)(Array.fill(p.bCols + p.sysW -1)(0))
+  val cReg = Array.fill(p.aRows)(Array.fill(p.bCols)(0))
+
+  // Takes input Matrices a and b.
+  // Fills aReg and bReg with the vectors that will be passed to TPU to compute a x b
+  def formatForInput(a: Matrix, b: Matrix): Unit = {
+    for (col <- 0 until p.aCols) {
+      topVecs()(col)
+    }
+    for (row <- 0 until p.bRows) {
+      leftVecs(row) = (Array.concat(b(row), Array.fill(row)(0)))
     }
   }
 }

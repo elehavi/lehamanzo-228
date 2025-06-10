@@ -236,6 +236,8 @@ class parameterizedTPUTester extends AnyFlatSpec with ChiselScalatestTester {
       // NW = 1 × 5
       dut.io.out.bits(0)(0).expect(5.S)
 
+      // TODO: add TPU Model comparison.
+
       dut.clock.step()            // cycle 3
 
       // NW = 1·5 + 2·6  = 17

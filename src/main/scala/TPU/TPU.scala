@@ -128,7 +128,6 @@ class Top_parameterized(p: TPUParams) extends Module {
     val TPU  = Module(new TPU_parameterized(p))
 
     // Local memory to flash input matrices to in idle state
-    // Local memory to flash input matrices to in idle state
     val aReg = Reg(Vec(p.aRows, Vec(p.aCols, SInt(p.iw.W))))
     val bReg = Reg(Vec(p.bRows, Vec(p.bCols, SInt(p.iw.W))))
 
